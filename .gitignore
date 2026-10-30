@@ -1,0 +1,6 @@
+# Mac system files
+.DS_Store
+
+# Real bank statements - never upload
+private/
+*.pdf
