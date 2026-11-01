@@ -28,7 +28,22 @@ I use three banks (Kuveyt Türk, Yapı Kredi, Ziraat). My scholarship arrives in
 - **Search and drill-down:** tap a category or bank on the home screen to see its transactions; search the list by text or amount, with in/out totals
 - **Month-to-month comparison** of income and spending on the home screen
 - **Private by design:** all data stays on the phone (SQLite in the browser); backup / restore as a file
-- Installable as an app (PWA) and works offline
+- Installable as an app (PWA) and works offline; new versions arrive by themselves, no reinstall needed
+
+## v2 — Budgets & goals
+
+- **3-month view** next to the monthly one: totals, monthly average and each month side by side
+- **Monthly budget per category,** with a warning on the home screen at 80% and progress bars on the Koç screen
+- **Saving goals** (e.g. *Erasmus fund: 20,000 TL*): add or take out money and watch the progress
+- **Month-to-month comparison** per category
+- **Euro:** cash entries can be in euros; they are shown on their own and never mixed into the lira totals
+
+## v3 — Coach (Koç tab)
+
+- **Weekly Finance Score (0–100)** made of four parts: spending pace (40), budgets (25), saving (25) and an empty review box (10), with the last four weeks side by side
+- **Tips** written from my own data (e.g. *"Food spending is up 40% on last month"*, *"85% of the Market budget is used"*)
+- **Streaks** (days in a row under the daily allowance, no-spend days) and **badges**
+- All rule-based and calculated on the phone; nothing is sent anywhere
 
 ## How it was built
 
@@ -58,6 +73,7 @@ I approached it like a business analyst first, then built it:
 ├── js/
 │   ├── parsers.js      PDF → transactions (one parser per bank)
 │   ├── ocr.js          photo statements: layout, digit re-reading, balance checks
+│   ├── coach.js        Finance Score, tips, streaks and badges (v3)
 │   ├── db.js           SQLite database, rules, summaries
 │   └── app.js          screens and interactions
 ├── lib/                sql.js and pdf.js (third-party libraries)
@@ -69,8 +85,8 @@ I approached it like a business analyst first, then built it:
 
 ## Roadmap
 
-- **v2** — monthly budgets per category, saving goals, month-to-month comparison, euro support (for my Erasmus semester)
-- **v3** — weekly "Finance Score", streaks and rule-based tips
+- ~~**v2** — monthly budgets per category, saving goals, month-to-month comparison, euro support (for my Erasmus semester)~~ done
+- ~~**v3** — weekly "Finance Score", streaks and rule-based tips~~ done
 - **v4** — optional AI coach that reads the monthly summary
 
 ## Privacy

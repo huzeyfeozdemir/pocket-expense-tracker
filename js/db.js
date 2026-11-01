@@ -53,6 +53,17 @@
       source      TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'learned')),
       UNIQUE (keyword, direction)
     );
+    CREATE TABLE IF NOT EXISTS budgets (
+      category_id  INTEGER PRIMARY KEY REFERENCES categories(id),
+      amount_kurus INTEGER NOT NULL CHECK (amount_kurus > 0)
+    );
+    CREATE TABLE IF NOT EXISTS goals (
+      id           INTEGER PRIMARY KEY,
+      name         TEXT NOT NULL,
+      target_kurus INTEGER NOT NULL CHECK (target_kurus > 0),
+      saved_kurus  INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL DEFAULT (date('now'))
+    );
     CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
     CREATE INDEX IF NOT EXISTS idx_tx_review ON transactions(needs_review);
   `;
@@ -350,12 +361,13 @@
       return alsoCategorized;
     }
 
-    addManual({ date, description, amountKurus, categoryId }) {
+    // currency: 'TRY' or 'EUR'. Euro amounts are kept apart: they never mix into the lira totals.
+    addManual({ date, description, amountKurus, categoryId, currency = 'TRY' }) {
       const accountId = this.accountId('Nakit', 'Cüzdan', 'cash');
       this.run(
-        `INSERT INTO transactions (account_id, date, description, search_text, amount_kurus, category_id, source, fingerprint)
-         VALUES (:a, :d, :desc, :s, :amt, :c, 'manual', :fp)`,
-        { ':a': accountId, ':d': date, ':desc': description, ':s': normalize(description), ':amt': amountKurus, ':c': categoryId, ':fp': `MANUAL|${Date.now()}|${Math.random()}` }
+        `INSERT INTO transactions (account_id, date, description, search_text, amount_kurus, currency, category_id, source, fingerprint)
+         VALUES (:a, :d, :desc, :s, :amt, :cur, :c, 'manual', :fp)`,
+        { ':a': accountId, ':d': date, ':desc': description, ':s': normalize(description), ':amt': amountKurus, ':cur': currency, ':c': categoryId, ':fp': `MANUAL|${Date.now()}|${Math.random()}` }
       );
     }
 
@@ -401,6 +413,7 @@
     deleteCategory(id) {
       this.run('UPDATE transactions SET category_id = NULL, needs_review = 1 WHERE category_id = :id', { ':id': id });
       this.run('DELETE FROM rules WHERE category_id = :id', { ':id': id });
+      this.run('DELETE FROM budgets WHERE category_id = :id', { ':id': id });
       this.run('DELETE FROM categories WHERE id = :id AND custom = 1', { ':id': id });
     }
     months() {
@@ -409,14 +422,15 @@
     banks() {
       return this.all('SELECT DISTINCT a.bank FROM accounts a JOIN transactions t ON t.account_id = a.id ORDER BY a.bank').map((r) => r.bank);
     }
-    // The functions below take a month ('YYYY-MM') or a range of months (from, to)
-    summary(from, to = from) {
+    // The functions below take a month ('YYYY-MM') or a range of months (from, to).
+    // Totals are in lira; summary() can also add up the euro transactions on their own.
+    summary(from, to = from, currency = 'TRY') {
       return this.one(`
         SELECT
           COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
           COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
         FROM transactions t JOIN categories c ON c.id = t.category_id
-        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t`, { ':f': from, ':t': to });
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t AND t.currency = :cur`, { ':f': from, ':t': to, ':cur': currency });
     }
     pendingInMonth(from, to = from) {
       return this.one(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_kurus), 0) AS total FROM transactions
@@ -426,7 +440,7 @@
       return this.all(`
         SELECT c.id, c.name, c.color, SUM(-t.amount_kurus) AS total
         FROM transactions t JOIN categories c ON c.id = t.category_id
-        WHERE c.kind = 'expense' AND strftime('%Y-%m', t.date) BETWEEN :f AND :t
+        WHERE c.kind = 'expense' AND t.currency = 'TRY' AND strftime('%Y-%m', t.date) BETWEEN :f AND :t
         GROUP BY c.id HAVING total > 0
         ORDER BY total DESC`, { ':f': from, ':t': to });
     }
@@ -438,7 +452,7 @@
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
         LEFT JOIN categories c ON c.id = t.category_id
-        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t AND t.currency = 'TRY'
         GROUP BY a.bank ORDER BY expense DESC`, { ':f': from, ':t': to });
     }
     // Income and spending of each month in the range
@@ -448,12 +462,12 @@
                COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
                COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
         FROM transactions t JOIN categories c ON c.id = t.category_id
-        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t AND t.currency = 'TRY'
         GROUP BY month ORDER BY month`, { ':f': from, ':t': to });
     }
     transactions({ month, to, bank, categoryId } = {}) {
       return this.all(`
-        SELECT t.id, t.date, t.description, t.amount_kurus, t.needs_review, t.source,
+        SELECT t.id, t.date, t.description, t.amount_kurus, t.currency, t.needs_review, t.source,
                a.bank, c.id AS category_id, c.name AS category, c.kind, c.color
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
@@ -464,6 +478,67 @@
         ORDER BY t.date DESC, t.id DESC`,
         { ':m': month || null, ':t': to || month || null, ':b': bank || null, ':c': categoryId == null ? null : categoryId });
     }
+
+    // ---- Budgets: a monthly limit per expense category ----
+    budgets() {
+      return this.all(`SELECT b.category_id AS id, c.name, c.color, b.amount_kurus AS budget
+                       FROM budgets b JOIN categories c ON c.id = b.category_id ORDER BY c.id`);
+    }
+    // amountKurus = null removes the budget
+    setBudget(categoryId, amountKurus) {
+      if (!amountKurus) this.run('DELETE FROM budgets WHERE category_id = :c', { ':c': categoryId });
+      else this.run(`INSERT INTO budgets (category_id, amount_kurus) VALUES (:c, :a)
+                     ON CONFLICT (category_id) DO UPDATE SET amount_kurus = excluded.amount_kurus`, { ':c': categoryId, ':a': amountKurus });
+    }
+    // Each budget with what was spent in that month (until `until`, a date, when given)
+    budgetStatus(month, until = null) {
+      return this.all(`
+        SELECT b.category_id AS id, c.name, c.color, b.amount_kurus AS budget,
+               COALESCE((SELECT SUM(-t.amount_kurus) FROM transactions t
+                         WHERE t.category_id = b.category_id AND t.currency = 'TRY'
+                           AND strftime('%Y-%m', t.date) = :m AND (:u IS NULL OR t.date <= :u)), 0) AS spent
+        FROM budgets b JOIN categories c ON c.id = b.category_id
+        ORDER BY spent * 1.0 / b.amount_kurus DESC`, { ':m': month, ':u': until });
+    }
+
+    // ---- Saving goals (e.g. "Erasmus fonu: 20.000 ₺"); money is added by hand ----
+    goals() {
+      return this.all('SELECT id, name, target_kurus AS target, saved_kurus AS saved FROM goals ORDER BY id');
+    }
+    addGoal(name, targetKurus) {
+      const clean = String(name).trim().replace(/\s+/g, ' ');
+      if (!clean) throw new Error('Hedefe bir isim ver.');
+      this.run('INSERT INTO goals (name, target_kurus) VALUES (:n, :t)', { ':n': clean, ':t': targetKurus });
+    }
+    // deltaKurus > 0 puts money in, < 0 takes it out (never below zero)
+    addToGoal(id, deltaKurus) {
+      this.run('UPDATE goals SET saved_kurus = MAX(0, saved_kurus + :d) WHERE id = :id', { ':d': deltaKurus, ':id': id });
+    }
+    deleteGoal(id) {
+      this.run('DELETE FROM goals WHERE id = :id', { ':id': id });
+    }
+
+    // ---- For the coach: lira spending day by day ----
+    dailyExpense(from, to) {
+      return this.all(`
+        SELECT t.date, SUM(-t.amount_kurus) AS expense
+        FROM transactions t JOIN categories c ON c.id = t.category_id
+        WHERE c.kind = 'expense' AND t.currency = 'TRY' AND t.date BETWEEN :f AND :t
+        GROUP BY t.date`, { ':f': from, ':t': to });
+    }
+    // Income and spending (lira) between two dates
+    totalsBetween(from, to) {
+      return this.one(`
+        SELECT
+          COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
+          COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
+        FROM transactions t JOIN categories c ON c.id = t.category_id
+        WHERE t.currency = 'TRY' AND t.date BETWEEN :f AND :t`, { ':f': from, ':t': to });
+    }
+    dataRange() {
+      return this.one("SELECT MIN(date) AS first, MAX(date) AS last FROM transactions WHERE currency = 'TRY'");
+    }
+
     // Every statement file I uploaded, with how many transactions it brought in
     imports() {
       return this.all(`

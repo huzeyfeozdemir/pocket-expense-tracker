@@ -9,6 +9,9 @@
 -- transactions  every transaction from every bank; search_text = description without Turkish letters
 -- rules         "if the description contains KEYWORD (and money goes in/out) → CATEGORY"
 --               default rules ship with the app, learned rules come from the review box
+-- budgets       monthly spending limit per expense category (v2)
+-- goals         saving goals and how much is saved so far (v2)
+-- transactions.currency  'TRY' or 'EUR'; euro is never added into the lira totals
 
 PRAGMA foreign_keys = ON;
 
@@ -54,6 +57,18 @@ CREATE TABLE IF NOT EXISTS rules (
   priority    INTEGER NOT NULL DEFAULT 50,
   source      TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'learned')),
   UNIQUE (keyword, direction)
+);
+-- v2: monthly budget per expense category, and saving goals (money is added by hand)
+CREATE TABLE IF NOT EXISTS budgets (
+  category_id  INTEGER PRIMARY KEY REFERENCES categories(id),
+  amount_kurus INTEGER NOT NULL CHECK (amount_kurus > 0)
+);
+CREATE TABLE IF NOT EXISTS goals (
+  id           INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL,
+  target_kurus INTEGER NOT NULL CHECK (target_kurus > 0),
+  saved_kurus  INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT (date('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_tx_review ON transactions(needs_review);

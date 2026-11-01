@@ -105,4 +105,4 @@ Real statements contain personal data (IBAN, address, names) and are **never** a
 
 ## 10. Status
 
-v1 is implemented (November 2026). Credit card statement import, Excel/CSV import and the v2–v4 features are still open.
+v1, v2 and v3 are implemented (November 2026). Euro is kept apart from the lira totals (no exchange rates). Credit card statement import, Excel/CSV import and v4 (AI coach) are still open.

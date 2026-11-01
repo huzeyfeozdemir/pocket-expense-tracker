@@ -26,15 +26,16 @@
   const DAYS = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
   const money = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // 121044 → "1.210,44 ₺"
-  function tl(kurus, { sign = false } = {}) {
-    const text = money.format(Math.abs(kurus) / 100) + ' ₺';
+  const SYMBOL = { TRY: '₺', EUR: '€' };
+  // 121044 → "1.210,44 ₺" (cur: 'EUR' → "1.210,44 €")
+  function tl(kurus, { sign = false, cur = 'TRY' } = {}) {
+    const text = money.format(Math.abs(kurus) / 100) + ' ' + SYMBOL[cur];
     if (!sign) return (kurus < 0 ? '−' : '') + text;
     return (kurus < 0 ? '−' : '+') + text;
   }
   // Whole lira for the small summary cards: 1209044 → "12.090 ₺"
-  function tlShort(kurus) {
-    return (kurus < 0 ? '−' : '') + Math.round(Math.abs(kurus) / 100).toLocaleString('tr-TR') + ' ₺';
+  function tlShort(kurus, cur = 'TRY') {
+    return (kurus < 0 ? '−' : '') + Math.round(Math.abs(kurus) / 100).toLocaleString('tr-TR') + ' ' + SYMBOL[cur];
   }
   // "2026-10-21" → "21 Eki 2026"
   function shortDate(iso) {
@@ -125,7 +126,7 @@
   }
 
   function render() {
-    const fn = { home: renderHome, list: renderList, upload: renderUpload, review: renderReview }[state.screen];
+    const fn = { home: renderHome, list: renderList, upload: renderUpload, review: renderReview, coach: renderCoach }[state.screen];
     fn();
     const n = db.reviewQueue().length;
     const badge = $('#review-badge');
@@ -165,6 +166,9 @@
     const pending = db.pendingInMonth(from, to);
     const cats = db.byCategory(from, to);
     const banks = db.byBank(from, to);
+    const euro = db.summary(from, to, 'EUR');
+    // Monthly view: budgets that are nearly used up (≥ 80%)
+    const tight = state.span === 1 ? db.budgetStatus(state.month).filter((b) => b.spent >= b.budget * 0.8) : [];
     const balance = s.income - s.expense;
     const maxBank = Math.max(1, ...banks.map((b) => b.expense));
     // Shares are taken over the categories shown (a category whose refunds exceed its spending is left out)
@@ -210,6 +214,22 @@
         <button class="banner" data-go="review">
           <span>🔍 ${pending.n} işlem seni bekliyor<small>Kategorisi belli olmayan işlemler toplamlara henüz dahil değil.</small></span>
           <span>İncele ›</span>
+        </button>` : ''}
+
+      ${euro.income || euro.expense ? `
+        <div class="card euro-card">
+          <div class="label">💶 Euro (TL toplamlarına katılmaz)</div>
+          <div class="euro-line">
+            <span>Gelir <b class="pos">${tl(euro.income, { cur: 'EUR' })}</b></span>
+            <span>Gider <b class="neg">${tl(euro.expense, { cur: 'EUR' })}</b></span>
+            <span>Kalan <b>${tl(euro.income - euro.expense, { cur: 'EUR' })}</b></span>
+          </div>
+        </div>` : ''}
+
+      ${tight.length ? `
+        <button class="card budget-alert" data-go="coach">
+          ${tight.map((b) => `<div>${b.spent > b.budget ? '🚨' : '⚠️'} <b>${esc(b.name)}</b> bütçesinin %${Math.round((b.spent / b.budget) * 100)}'i kullanıldı</div>`).join('')}
+          <small class="muted">Bütçelere bak ›</small>
         </button>` : ''}
 
       ${perMonth.length ? `
@@ -289,6 +309,7 @@
     const cats = db.categories();
     const { from, to } = period();
     const rows = months.length ? db.transactions({ month: from, to, bank: state.bank, categoryId: state.categoryId }) : [];
+    const hasEuro = rows.some((r) => r.currency === 'EUR');
     const group = (kind, label) => {
       const list = cats.filter((c) => c.kind === kind);
       return `<optgroup label="${label}">${list.map((c) => `<option value="${c.id}" ${state.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`;
@@ -326,11 +347,16 @@
         if (!groups.length || groups[groups.length - 1].date !== r.date) groups.push({ date: r.date, rows: [] });
         groups[groups.length - 1].rows.push(r);
       }
-      const inSum = shown.filter((r) => r.amount_kurus > 0).reduce((t, r) => t + r.amount_kurus, 0);
-      const outSum = shown.filter((r) => r.amount_kurus < 0).reduce((t, r) => t + r.amount_kurus, 0);
+      // Lira and euro are added up separately
+      const sums = (cur) => {
+        const of = shown.filter((r) => r.currency === cur);
+        const inSum = of.filter((r) => r.amount_kurus > 0).reduce((t, r) => t + r.amount_kurus, 0);
+        const outSum = of.filter((r) => r.amount_kurus < 0).reduce((t, r) => t + r.amount_kurus, 0);
+        return `${inSum ? ` · <span class="pos">Giren ${tl(inSum, { cur })}</span>` : ''}${outSum ? ` · <span class="neg">Çıkan ${tl(-outSum, { cur })}</span>` : ''}`;
+      };
       body.innerHTML = !shown.length
         ? `<div class="card empty"><p class="muted">${rows.length ? 'Aramaya uyan işlem yok.' : 'Gösterilecek işlem yok.'}</p></div>`
-        : `<div class="list-total small muted">${shown.length} işlem${inSum ? ` · <span class="pos">Giren ${tl(inSum)}</span>` : ''}${outSum ? ` · <span class="neg">Çıkan ${tl(-outSum)}</span>` : ''}</div>
+        : `<div class="list-total small muted">${shown.length} işlem${sums('TRY')}${hasEuro ? `<br>Euro${sums('EUR')}` : ''}</div>
            ${groups.map((g) => `<div class="day">${dayLabel(g.date)}</div><div class="tx-group">${g.rows.map(txRow).join('')}</div>`).join('')}`;
       for (const row of body.querySelectorAll('[data-tx]')) row.onclick = () => openCategorySheet(Number(row.dataset.tx));
     };
@@ -355,7 +381,7 @@
           <b>${esc(shortTitle(r.description, r.amount_kurus))}</b>
           <small>${r.needs_review ? '<span class="tag-review">❓ İncelenecek</span>' : esc(r.category || '')} · ${esc(r.bank)}</small>
         </span>
-        <span class="amt ${r.amount_kurus > 0 ? 'pos' : ''}">${tl(r.amount_kurus, { sign: true })}</span>
+        <span class="amt ${r.amount_kurus > 0 ? 'pos' : ''}">${tl(r.amount_kurus, { sign: true, cur: r.currency })}</span>
       </button>`;
   }
 
@@ -668,6 +694,221 @@
          </details>`;
   }
 
+  // ---------- 5. Coach: score, tips, streaks, budgets, goals ----------
+
+  function renderCoach() {
+    const el = $('#screen-coach');
+    const weeks = Coach.scores(db);
+    const week = weeks[weeks.length - 1];
+    const streak = Coach.streaks(db);
+    const tips = Coach.tips(db, tl);
+    const badges = Coach.badges(db, streak);
+    const month = db.months()[0] || todayIso().slice(0, 7);
+    const budgets = db.budgetStatus(month);
+    const goals = db.goals();
+    const prevMonth = addMonths(month, -1);
+    const before = new Map(db.byCategory(prevMonth).map((c) => [c.id, c.total]));
+    const compare = before.size ? db.byCategory(month).map((c) => ({ ...c, before: before.get(c.id) || 0 })) : [];
+    const scoreColor = (n) => (n >= 60 ? 'var(--green-2)' : n >= 40 ? '#e9a23b' : 'var(--red)');
+    const PARTS = [['pace', 'Harcama hızı', 40], ['budget', 'Bütçe', 25], ['saving', 'Birikim', 25], ['tidy', 'Düzen', 10]];
+
+    el.innerHTML = `
+      <h1>Koç 🏋️</h1>
+      ${week ? `
+        <div class="card score-card">
+          <div class="score-top">
+            ${scoreRing(week.score, scoreColor(week.score))}
+            <div class="score-info">
+              <b>${Coach.scoreLabel(week.score)}</b>
+              <div class="muted small">Haftalık Finans Puanı<br>${shortDate(week.start)} – ${shortDate(week.end)}</div>
+            </div>
+          </div>
+          ${PARTS.map(([key, label, max]) => `
+            <div class="part"><span>${label}</span><div class="bar"><i style="width:${(week.parts[key] / max) * 100}%"></i></div><b>${Math.round(week.parts[key])}/${max}</b></div>`).join('')}
+          <p class="muted small" style="margin:8px 0 0">Bu hafta ${tl(week.spent)} harcadın${week.weekly ? `; haftalık payın ${tl(Math.round(week.weekly))}` : ''}.</p>
+          ${weeks.length > 1 ? `
+            <div class="weeks">${weeks.map((w) => `
+              <div class="week"><i style="height:${Math.max(w.score, 4) / 2}px;background:${scoreColor(w.score)}"></i><b>${w.score}</b><small>${shortDate(w.end).replace(/ \d{4}$/, '')}</small></div>`).join('')}
+            </div>` : ''}
+        </div>` : `
+        <div class="card empty">
+          <div class="big">🏋️</div>
+          <p class="muted">Ekstre yükleyince haftalık Finans Puanını ve ipuçlarını burada göreceksin.</p>
+        </div>`}
+
+      ${tips.length ? `
+        <h2>İpuçları</h2>
+        <div class="card">
+          ${tips.map((t) => `<${t.go ? `button data-go="${t.go}"` : 'div'} class="tip tip-${t.tone}"><span>${t.icon}</span><span>${esc(t.text)}</span></${t.go ? 'button' : 'div'}>`).join('')}
+        </div>` : ''}
+
+      ${streak.limit ? `
+        <h2>Seri</h2>
+        <div class="card streak">
+          <div><b>🔥 ${streak.current} gün</b><small class="muted">limit altında</small></div>
+          <div><b>${streak.best} gün</b><small class="muted">en iyi seri</small></div>
+          <div><b>${streak.noSpendDays}</b><small class="muted">harcamasız gün (bu ay)</small></div>
+        </div>
+        <p class="muted small">Günlük limit: ${tl(Math.round(streak.limit))} (${streak.fromBudgets ? 'bütçelerinden' : 'ortalama harcamandan'}).</p>` : ''}
+
+      <h2>Rozetler</h2>
+      <div class="badges">
+        ${badges.map((b) => `<div class="badge-item ${b.earned ? 'on' : ''}"><span>${b.icon}</span><small>${esc(b.name)}</small></div>`).join('')}
+      </div>
+
+      <div class="title-row"><h2>Bütçeler · ${monthLabel(month)}</h2><button class="link-btn edit-btn" id="edit-budgets">Düzenle</button></div>
+      <div class="card">
+        ${budgets.length ? budgets.map((b) => {
+          const pct = Math.round((b.spent / b.budget) * 100);
+          const color = pct > 100 ? 'var(--red)' : pct >= 80 ? '#e9a23b' : 'var(--green-2)';
+          return `
+            <div class="bar-row">
+              <div class="top"><span><span class="dot-inline" style="background:${b.color}"></span>${esc(b.name)}</span><b>${tl(b.spent)} / ${tlShort(b.budget)}</b></div>
+              <div class="bar"><i style="width:${Math.min(pct, 100)}%;background:${color}"></i></div>
+              <div class="small ${pct > 100 ? 'neg' : 'muted'}" style="margin-top:4px">${pct > 100 ? `${tl(b.spent - b.budget)} aştın` : `${tl(b.budget - b.spent)} kaldı · %${pct}`}</div>
+            </div>`;
+        }).join('') : '<p class="muted small" style="margin:0 0 10px">Kategorilere aylık bütçe koy; %80\'e gelince uyarayım.</p><button class="btn ghost" id="edit-budgets-2">+ Bütçe koy</button>'}
+      </div>
+
+      <div class="title-row"><h2>Hedefler</h2><button class="link-btn edit-btn" id="add-goal">+ Yeni hedef</button></div>
+      <div class="card">
+        ${goals.length ? goals.map((g) => {
+          const pct = Math.min(100, Math.round((g.saved / g.target) * 100));
+          return `
+            <button class="bar-row" data-goal="${g.id}">
+              <div class="top"><span>${g.saved >= g.target ? '🏆 ' : ''}${esc(g.name)}</span><b>%${pct}</b></div>
+              <div class="bar"><i style="width:${pct}%"></i></div>
+              <div class="small muted" style="margin-top:4px">${tl(g.saved)} / ${tl(g.target)}${g.saved < g.target ? ` · ${tl(g.target - g.saved)} kaldı` : ''}</div>
+            </button>`;
+        }).join('') : '<p class="muted small" style="margin:0">Örn. "Erasmus fonu: 20.000 ₺". Biriktirdikçe ekle, ilerlemeni gör.</p>'}
+      </div>
+
+      ${compare.length ? `
+        <h2>Geçen aya göre</h2>
+        <p class="muted small" style="margin-top:-4px">${monthLabel(month)} · ${monthLabel(prevMonth)} ile karşılaştırma</p>
+        <div class="card">
+          ${compare.map((c) => {
+            const diff = c.total - c.before;
+            const pct = c.before ? Math.round((diff / c.before) * 100) : null;
+            return `
+              <div class="cmp-row">
+                <span class="dot-inline" style="background:${c.color}"></span>
+                <span class="name">${esc(c.name)}</span>
+                <span class="${diff > 0 ? 'neg' : diff < 0 ? 'pos' : 'muted'} small">${pct == null ? 'yeni' : pct === 0 ? '=' : `${diff > 0 ? '▲' : '▼'} %${Math.abs(pct)}`}</span>
+                <b>${tl(c.total)}</b>
+              </div>`;
+          }).join('')}
+        </div>` : ''}`;
+
+    for (const id of ['#edit-budgets', '#edit-budgets-2']) if ($(id)) $(id).onclick = openBudgetSheet;
+    $('#add-goal').onclick = () => openGoalSheet(null);
+    for (const b of el.querySelectorAll('[data-goal]')) b.onclick = () => openGoalSheet(goals.find((g) => g.id === Number(b.dataset.goal)));
+  }
+
+  function scoreRing(score, color) {
+    const r = 40, c = 2 * Math.PI * r;
+    return `<svg class="score-ring" viewBox="0 0 100 100" role="img" aria-label="Finans puanı ${score}">
+      <circle r="${r}" cx="50" cy="50" fill="none" stroke="var(--line)" stroke-width="10"/>
+      <circle r="${r}" cx="50" cy="50" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round"
+        stroke-dasharray="${(score / 100) * c} ${c}" transform="rotate(-90 50 50)"/>
+      <text x="50" y="57" text-anchor="middle" font-size="24" font-weight="800" fill="currentColor">${score}</text>
+    </svg>`;
+  }
+
+  // Monthly budget per expense category; an empty box means no budget
+  function openBudgetSheet() {
+    const current = new Map(db.budgets().map((b) => [b.id, b.budget]));
+    const cats = db.categories().filter((c) => c.kind === 'expense');
+    openSheet(`
+      <h3>Aylık bütçeler</h3>
+      <p class="muted small" style="margin-top:0">Her kategori için bir ayda en fazla ne harcamak istiyorsun? Boş bırakırsan bütçe yok.</p>
+      ${cats.map((c) => `
+        <div class="budget-input">
+          <span><span class="dot-inline" style="background:${c.color}"></span>${esc(c.name)}</span>
+          <input type="text" inputmode="decimal" autocomplete="off" data-budget="${c.id}" placeholder="—"
+            value="${current.has(c.id) ? money.format(current.get(c.id) / 100) : ''}">
+        </div>`).join('')}
+      <div class="btn-row" style="margin-top:12px"><button class="btn ghost" id="b-cancel">Vazgeç</button><button class="btn" id="b-save">Kaydet</button></div>`,
+      (sheet) => {
+        $('#b-cancel').onclick = closeSheet;
+        $('#b-save').onclick = async () => {
+          for (const input of sheet.querySelectorAll('[data-budget]')) {
+            const text = input.value.trim();
+            const value = text ? parseAmount(text) : null;
+            if (text && !value) { input.focus(); return toast('Tutarı yaz (örn. 2.500).'); }
+            db.setBudget(Number(input.dataset.budget), value);
+          }
+          await db.save();
+          closeSheet();
+          toast('Bütçeler kaydedildi');
+          render();
+        };
+      });
+  }
+
+  // goal = null → new goal; otherwise add or take out money, or delete it
+  function openGoalSheet(goal) {
+    if (!goal) {
+      openSheet(`
+        <h3>Yeni hedef</h3>
+        <div class="field"><label>İsim</label><input type="text" id="g-name" maxlength="40" placeholder="Örn. Erasmus fonu"></div>
+        <div class="field"><label>Hedef tutar (₺)</label><input type="text" id="g-target" inputmode="decimal" autocomplete="off" placeholder="20.000"></div>
+        <div class="field"><label>Şu ana kadar biriken (₺, isteğe bağlı)</label><input type="text" id="g-saved" inputmode="decimal" autocomplete="off" placeholder="0"></div>
+        <div class="btn-row"><button class="btn ghost" id="g-cancel">Vazgeç</button><button class="btn" id="g-save">Ekle</button></div>`,
+        () => {
+          $('#g-name').focus();
+          $('#g-cancel').onclick = closeSheet;
+          $('#g-save').onclick = async () => {
+            const target = parseAmount($('#g-target').value);
+            if (!target) return toast('Hedef tutarı yaz (örn. 20.000).');
+            try {
+              db.addGoal($('#g-name').value, target);
+              const saved = parseAmount($('#g-saved').value);
+              if (saved) db.addToGoal(db.one('SELECT last_insert_rowid() AS id').id, saved);
+            } catch (err) {
+              return toast(err.message);
+            }
+            await db.save();
+            closeSheet();
+            toast('Hedef eklendi');
+            render();
+          };
+        });
+      return;
+    }
+    let sign = 1;
+    openSheet(`
+      <h3>${esc(goal.name)}</h3>
+      <div class="muted small">${tl(goal.saved)} / ${tl(goal.target)}</div>
+      <div class="seg" style="margin-top:12px"><button class="on" data-gsign="1">Para ekle</button><button data-gsign="-1">Çek</button></div>
+      <div class="field"><input type="text" id="g-amount" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
+      <div class="btn-row"><button class="btn ghost" id="g-cancel">Vazgeç</button><button class="btn" id="g-save">Kaydet</button></div>
+      <button class="btn danger" id="g-delete" style="margin-top:8px">Hedefi sil</button>`,
+      (sheet) => {
+        $('#g-amount').focus();
+        for (const b of sheet.querySelectorAll('[data-gsign]')) {
+          b.onclick = () => { sign = Number(b.dataset.gsign); for (const x of sheet.querySelectorAll('[data-gsign]')) x.classList.toggle('on', x === b); };
+        }
+        $('#g-cancel').onclick = closeSheet;
+        $('#g-save').onclick = async () => {
+          const amount = parseAmount($('#g-amount').value);
+          if (!amount) return toast('Tutarı yaz (örn. 500).');
+          db.addToGoal(goal.id, sign * amount);
+          await db.save();
+          closeSheet();
+          const reached = sign > 0 && goal.saved < goal.target && goal.saved + amount >= goal.target;
+          toast(reached ? '🏆 Hedefe ulaştın!' : 'Kaydedildi');
+          render();
+        };
+        $('#g-delete').onclick = () => confirmSheet('Hedef silinsin mi?', `"${goal.name}" ve biriken tutar kaydı silinecek. (Paran bir yere gitmez; bu sadece takip içindi.)`, 'Evet, sil', async () => {
+          db.deleteGoal(goal.id);
+          await db.save();
+          toast('Hedef silindi');
+          render();
+        });
+      });
+  }
+
   // ---------- Sheets (pop-up panels) ----------
 
   // The phone's back button closes an open panel instead of leaving the app:
@@ -697,7 +938,7 @@
     );
     openSheet(`
       <h3>${esc(shortTitle(tx.description, tx.amount_kurus))}</h3>
-      <div class="muted small">${dayLabel(tx.date)} · ${esc(tx.bank)} · <b>${tl(tx.amount_kurus, { sign: true })}</b></div>
+      <div class="muted small">${dayLabel(tx.date)} · ${esc(tx.bank)} · <b>${tl(tx.amount_kurus, { sign: true, cur: tx.currency })}</b></div>
       <p class="small" style="word-break:break-word">${esc(tx.description)}</p>
       ${categoryGrid(tx.amount_kurus, tx.category_id)}
       <label class="remember"><input type="checkbox" id="sheet-remember">
@@ -759,6 +1000,7 @@
   // "+ Nakit" → add a cash expense or income
   function openCashSheet() {
     let kind = 'expense';
+    let currency = 'TRY';
     const draw = (sheet) => {
       const cats = db.categories().filter((c) => c.kind === kind);
       sheet.querySelector('#cash-cat').innerHTML = cats.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
@@ -767,7 +1009,12 @@
       <h3>Nakit ekle</h3>
       <p class="muted small" style="margin-top:0">Nakit harcamalar ekstrede görünmez; buradan elle eklenir.</p>
       <div class="seg"><button class="on" data-kind="expense">Gider</button><button data-kind="income">Gelir</button></div>
-      <div class="field"><label>Tutar (₺)</label><input type="text" id="cash-amount" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
+      <div class="field"><label>Tutar</label>
+        <div class="amount-row">
+          <input type="text" id="cash-amount" inputmode="decimal" autocomplete="off" placeholder="0,00">
+          <div class="seg"><button class="on" data-cur="TRY">₺</button><button data-cur="EUR">€</button></div>
+        </div>
+      </div>
       <div class="field"><label>Açıklama</label><input type="text" id="cash-desc" placeholder="Örn. Halı saha"></div>
       <div class="field"><label>Kategori</label><select id="cash-cat"></select></div>
       <div class="field"><label>Tarih</label><input type="date" id="cash-date" value="${todayIso()}"></div>
@@ -781,6 +1028,12 @@
             draw(sheet);
           };
         }
+        for (const b of sheet.querySelectorAll('[data-cur]')) {
+          b.onclick = () => {
+            currency = b.dataset.cur;
+            for (const x of sheet.querySelectorAll('[data-cur]')) x.classList.toggle('on', x === b);
+          };
+        }
         $('#cash-cancel').onclick = closeSheet;
         $('#cash-save').onclick = async () => {
           const amount = parseAmount($('#cash-amount').value);
@@ -791,6 +1044,7 @@
             description: $('#cash-desc').value.trim() || 'Nakit',
             amountKurus: kind === 'expense' ? -amount : amount,
             categoryId: Number($('#cash-cat').value),
+            currency,
           });
           await db.save();
           closeSheet();

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Cep Bütçe</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=14">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -17,6 +17,7 @@
     <section id="screen-list" class="screen" hidden></section>
     <section id="screen-upload" class="screen" hidden></section>
     <section id="screen-review" class="screen" hidden></section>
+    <section id="screen-coach" class="screen" hidden></section>
     <div id="loading" class="loading">Yükleniyor…</div>
   </main>
 
@@ -39,6 +40,10 @@
       <span>İncele</span>
       <b class="badge" id="review-badge" hidden></b>
     </button>
+    <button data-screen="coach">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5"/></svg>
+      <span>Koç</span>
+    </button>
   </nav>
 
   <!-- Pop-up panel that slides up from the bottom (category picker, cash entry, confirmations) -->
@@ -52,10 +57,11 @@
   <script src="lib/sql-wasm.js"></script>
   <script src="lib/pdf.min.js"></script>
   <!-- Our code -->
-  <script src="js/parsers.js?v=10"></script>
-  <script src="js/db.js?v=10"></script>
-  <script src="js/ocr.js?v=10"></script>
-  <script src="js/app.js?v=10"></script>
+  <script src="js/parsers.js?v=14"></script>
+  <script src="js/db.js?v=14"></script>
+  <script src="js/ocr.js?v=14"></script>
+  <script src="js/coach.js?v=14"></script>
+  <script src="js/app.js?v=14"></script>
   <script>
     // Register the service worker so the phone can install the app (and open it offline)
     if ('serviceWorker' in navigator) {
