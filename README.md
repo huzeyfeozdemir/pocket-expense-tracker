@@ -21,6 +21,7 @@ I use three banks (Kuveyt Türk, Yapı Kredi, Ziraat). My scholarship arrives in
 - **Categorizes automatically** with keyword rules (e.g. `NETFA` → Food, `TURKCELL` → Bills)
 - **Review box:** asks *"what is this?"* for transactions it cannot recognize, and **learns** the answer as a new rule
 - **No double counting:** the same statement line is never imported twice; transfers between my own accounts are excluded from totals
+- **Manage statements:** see every uploaded statement (bank, period, number of transactions) and delete one together with its transactions
 - **Cash entries** for spending that never shows up on a statement
 - **Private by design:** all data stays on the phone (SQLite in the browser); backup / restore as a file
 - Installable as an app (PWA) and works offline
@@ -40,7 +41,7 @@ I approached it like a business analyst first, then built it:
 ### Interesting problems
 
 - **Reading PDFs by position.** Each bank prints its statement in columns. The parser finds the column headers and assigns every piece of text to a row and column by its x/y position. Descriptions that wrap over two lines are handled per bank (Kuveyt Türk wraps around the date line, Yapı Kredi wraps upwards, Ziraat splits columns across pages).
-- **Photo statements (OCR).** OCR can misread a digit, so each row is checked against the running balance and the printed debit/credit totals; rows that do not add up go to the review box. The same transaction read from a photo or from a text PDF gets the same fingerprint, so it is never counted twice.
+- **Photo statements (OCR).** A blurry picture makes plain OCR misread numbers (`−242,24` → `-24224`). The app first finds the table layout, then re-reads every date, amount and balance cell with a digits-only OCR at three zoom levels and lets the readings vote. The winning numbers must satisfy "balance change = amount" for every row and add up to the printed debit/credit totals; rows that do not are sent to the review box. The same transaction read from a photo or from a text PDF gets the same fingerprint, so it is never counted twice.
 - **Money as whole numbers.** Amounts are stored in kuruş (`-200,00 TL` → `-20000`) to avoid floating-point rounding errors.
 - **Turkish characters in rules.** Bank texts mix `İ/I`, `Ş/S`, `Ö/O`. Every description is normalized before matching, so the rule `KREDI KARTI ODEME` also matches `KREDİ KARTI ÖDEME`.
 - **Duplicates.** Every row gets a fingerprint (date + bank reference / time + amount). A `UNIQUE (account_id, fingerprint)` constraint makes duplicates impossible at the database level.
@@ -52,6 +53,7 @@ I approached it like a business analyst first, then built it:
 ├── style.css           design
 ├── js/
 │   ├── parsers.js      PDF → transactions (one parser per bank)
+│   ├── ocr.js          photo statements: layout, digit re-reading, balance checks
 │   ├── db.js           SQLite database, rules, summaries
 │   └── app.js          screens and interactions
 ├── lib/                sql.js and pdf.js (third-party libraries)

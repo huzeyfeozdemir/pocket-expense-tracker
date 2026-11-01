@@ -125,8 +125,8 @@
     let t = normalize(description);
     // Money transfer: remember the other person (receiver if I sent it, sender if I received it)
     if (/FAST|PARA TRANSFERI|HAVALE/.test(t)) {
-      const field = amountKurus < 0 ? 'ALICI' : 'GONDEREN';
-      const m = t.match(new RegExp(field + '\\s*:\\s*([A-Z ]+?)\\s*(?:,|$)'));
+      const field = amountKurus < 0 ? 'ALICI' : '(?:GONDEREN|GOND)'; // Ziraat writes "Gönd:"
+      const m = t.match(new RegExp(field + '\\s*:\\s*([A-Z ]+?)\\s*(?:,|$|\\d|-)'));
       if (m) return m[1].trim().split(' ').slice(0, 3).join(' ');
     }
     t = t

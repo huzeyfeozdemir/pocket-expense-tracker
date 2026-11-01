@@ -60,10 +60,10 @@
   // "Firma Adı: YIRMIBIRCO KAHVE ISTANBUL,Harcama" → "Yirmibirco Kahve"
   function shortTitle(description, amountKurus = -1) {
     const d = String(description);
-    const field = amountKurus < 0 ? 'Alıcı' : 'Gönderen';
+    const field = amountKurus < 0 ? 'Alıcı' : '(?:Gönderen|Gönd)'; // Ziraat writes "Gönd:
     let t =
       (d.match(/Kurum Adı\s*:\s*([^,]+)/i) || [])[1] ||
-      (/FAST|Para Transferi|HAVALE/i.test(d) && (d.match(new RegExp(field + '\\s*:\\s*([^,]+)', 'i')) || [])[1]) ||
+      (/FAST|Para Transferi|HAVALE/i.test(d) && (d.match(new RegExp(field + '\\s*:\\s*([^,\\d]+)', 'i')) || [])[1]) ||
       d
         .replace(/Firma Adı\s*:/i, ' ')
         .replace(/\b(POS|EPOS|TMSZ)\b/g, ' ')
@@ -372,7 +372,7 @@
         const data = new Uint8Array(await file.arrayBuffer());
         const status = (text) => ($('#import-result').innerHTML = `<div class="card" style="margin-top:12px">${esc(file.name)}: ${esc(text)}</div>`);
         status('okunuyor…');
-        const { bank, rows, ocr } = await Parsers.parseStatement(pdfjsLib, data, { ocrText: (d) => ocrPdf(d, status) });
+        const { bank, rows, ocr } = await Parsers.parseStatement(pdfjsLib, data, { ocr: (d) => ImageStatement.readImageStatement(pdfjsLib, d, status) });
         const bankName = Parsers.BANK_NAMES[bank];
         const res = db.importStatement(bankName, rows, file.name);
         results.push({ file: file.name, bank: bankName, ocr, uncertain: rows.filter((r) => r.uncertain).length, ...res });
@@ -385,50 +385,6 @@
     state.lastImport = results;
     state.month = null; // jump to the newest month
     render();
-  }
-
-  // ---------- OCR: reading statements saved as pictures ----------
-  // Tesseract (an open-source OCR engine) is large, so it is loaded only the first time it is needed.
-  let ocrWorker = null;
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('OCR dosyaları yüklenemedi. İnternet bağlantını kontrol et.'));
-      document.head.appendChild(s);
-    });
-  }
-  async function getOcrWorker(status) {
-    if (ocrWorker) return ocrWorker;
-    status('fotoğraf PDF — yazı tanıma (OCR) hazırlanıyor, ilk seferde biraz sürer…');
-    if (!window.Tesseract) await loadScript('lib/tesseract/tesseract.min.js');
-    ocrWorker = await Tesseract.createWorker('tur', 1, {
-      workerPath: 'lib/tesseract/worker.min.js',
-      corePath: 'lib/tesseract/',
-      langPath: 'lib/tesseract',
-      gzip: true,
-    });
-    await ocrWorker.setParameters({ preserve_interword_spaces: '1' });
-    return ocrWorker;
-  }
-  // Draw every page of the PDF as a picture, then read the text on it
-  async function ocrPdf(data, status) {
-    const worker = await getOcrWorker(status);
-    const doc = await pdfjsLib.getDocument({ data }).promise;
-    const texts = [];
-    for (let p = 1; p <= doc.numPages; p++) {
-      status(`fotoğraftaki yazılar okunuyor (sayfa ${p}/${doc.numPages})…`);
-      const page = await doc.getPage(p);
-      const viewport = page.getViewport({ scale: 3 });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      const { data: result } = await worker.recognize(canvas);
-      texts.push(result.text);
-    }
-    return texts.join('\n');
   }
 
   function downloadBackup() {

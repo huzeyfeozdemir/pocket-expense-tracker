@@ -259,22 +259,6 @@
   const PARSERS = { kuveyt: parseKuveyt, yapikredi: parseYapiKredi, ziraat: parseZiraat };
   const BANK_NAMES = { kuveyt: 'Kuveyt Türk', yapikredi: 'Yapı Kredi', ziraat: 'Ziraat' };
 
-  // ---------- Reading the PDF ----------
-
-  async function extractItems(pdfjsLib, data) {
-    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true, verbosity: 0 }).promise;
-    const items = [];
-    for (let p = 1; p <= doc.numPages; p++) {
-      const page = await doc.getPage(p);
-      const content = await page.getTextContent();
-      for (const it of content.items) {
-        if (it.str && it.str.trim()) items.push({ page: p, x: it.transform[4], y: it.transform[5], str: it.str });
-      }
-    }
-    return items;
-  }
-
-  // Main entry: returns { bank, rows } or throws a readable error.
   // ---------- Checking + / − against the balance column ----------
   // A statement lists rows either oldest-first or newest-first. We try both orders and keep
   // the one where "balance change = amount" holds for most rows. Then every row whose
@@ -310,80 +294,35 @@
     return { order, checked };
   }
 
-  // ---------- Image-only PDFs (OCR) ----------
-  // Some banks (Ziraat's mobile app) save the statement as a picture. app.js turns the
-  // picture into text with OCR (Tesseract); here we turn that text into transactions.
-  // OCR can misread a digit, so every row is checked against the balance column.
-
   function detectBankText(text) {
     return detectBank([{ str: text }]);
   }
 
-  function parseOcrZiraat(text) {
-    const money = '-?\\s?[\\d.]+,\\d{2}';
-    const lineRe = new RegExp('^(\\d{2}[.,]\\d{2}[.,]\\d{4})\\s*[—–-]?\\s*([A-Z]\\d{3,})?\\s+(.+?)\\s+(' + money + ')\\s+(' + money + ')\\s*$');
-    const rows = [];
-    for (const raw of text.split('\n')) {
-      const m = lineRe.exec(raw.trim());
-      if (!m) continue;
-      rows.push({
-        date: toIsoDate(m[1].replace(/,/g, '.')),
-        slip: m[2] || '',
-        description: m[3].replace(/\s+/g, ' ').trim(),
-        amountKurus: parseMoney(m[4].replace(/\s/g, '')),
-        balanceKurus: parseMoney(m[5]),
-      });
-    }
-    // The picture shows totals: "Borç: 0,00" (money out) and "Alacak: 4.000,00" (money in)
-    const total = (word) => {
-      const m = new RegExp(word + '\\s*:?\\s*([\\d.]+,\\d{2})').exec(text);
-      return m ? parseMoney(m[1]) : null;
-    };
-    const debitTotal = total('Bor[çc]');
-    const creditTotal = total('Alacak');
+  // ---------- Reading the PDF ----------
 
-    // + or − comes from the balance (works whether the list is oldest-first or newest-first)
-    const { order } = fixSignsByBalance(rows);
-
-    // The oldest row has no earlier balance: its sign is the one that makes "Alacak" (money in) add up
-    if (rows.length && creditTotal != null) {
-      const oldest = order === 'desc' ? rows[rows.length - 1] : rows[0];
-      const abs = Math.abs(oldest.amountKurus);
-      const otherIn = rows.filter((r) => r !== oldest && r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
-      oldest.amountKurus = otherIn + abs === creditTotal ? abs : -abs;
-      oldest.uncertain = false;
+  async function extractItems(pdfjsLib, data) {
+    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true, verbosity: 0 }).promise;
+    const items = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p);
+      const content = await page.getTextContent();
+      for (const it of content.items) {
+        if (it.str && it.str.trim()) items.push({ page: p, x: it.transform[4], y: it.transform[5], str: it.str });
+      }
     }
-    // Final check: the totals printed on the statement must match what we read
-    if (debitTotal != null && creditTotal != null) {
-      const inSum = rows.filter((r) => r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
-      const outSum = rows.filter((r) => r.amountKurus < 0).reduce((a, r) => a - r.amountKurus, 0);
-      if (inSum !== creditTotal || outSum !== debitTotal) rows.forEach((r) => (r.uncertain = true));
-    }
-    return rows.map((r) => ({
-      date: r.date,
-      description: r.description,
-      amountKurus: r.amountKurus,
-      balanceKurus: r.balanceKurus,
-      uncertain: !!r.uncertain,
-      fingerprint: `ZR|${r.date}|${r.slip}|${r.amountKurus}`,
-    }));
+    return items;
   }
 
-  const OCR_PARSERS = { ziraat: parseOcrZiraat };
-
   // Main entry: returns { bank, rows, ocr } or throws a readable error.
-  // options.ocrText(data) → Promise<string>: reads an image-only PDF (given by app.js in the browser)
+  // options.ocr(data) → Promise<{ text, rows }>: reads an image-only PDF (js/ocr.js, browser only)
   async function parseStatement(pdfjsLib, data, options = {}) {
     const items = await extractItems(pdfjsLib, data.slice()); // pdf.js takes over the buffer: give it a copy
     if (!items.length) {
-      if (!options.ocrText) {
-        throw new Error('Bu PDF\'te okunabilir metin yok (fotoğraf gibi kaydedilmiş).');
-      }
-      const text = await options.ocrText(data.slice());
+      if (!options.ocr) throw new Error('Bu PDF\'te okunabilir metin yok (fotoğraf gibi kaydedilmiş).');
+      const { text, rows } = await options.ocr(data.slice());
       const bank = detectBankText(text);
       if (!bank) throw new Error('Fotoğraf okundu ama hangi bankaya ait olduğu anlaşılamadı.');
-      if (!OCR_PARSERS[bank]) throw new Error(`${BANK_NAMES[bank]} için fotoğraf ekstre henüz desteklenmiyor.`);
-      const rows = OCR_PARSERS[bank](text);
+      if (bank !== 'ziraat') throw new Error(`${BANK_NAMES[bank]} için fotoğraf ekstre henüz desteklenmiyor.`);
       if (!rows.length) throw new Error('Fotoğraf okundu ama içinde işlem satırı bulunamadı.');
       return { bank, rows, ocr: true };
     }
@@ -392,11 +331,16 @@
     const rows = PARSERS[bank](items);
     if (!rows.length) throw new Error('Ekstrede işlem bulunamadı.');
     fixSignsByBalance(rows); // safety net: + / − must agree with the balance column
-    for (const r of rows) r.fingerprint = r.fingerprint.replace(/\|-?\d+$/, `|${r.amountKurus}`);
+    for (const r of rows) {
+      r.fingerprint =
+        bank === 'ziraat'
+          ? `ZR|${r.date}|${r.amountKurus}|${r.balanceKurus}` // same key as a photo of the same statement
+          : r.fingerprint.replace(/\|-?\d+$/, `|${r.amountKurus}`);
+    }
     return { bank, rows, ocr: false };
   }
 
-  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, parseOcrZiraat, fixSignsByBalance, PARSERS, BANK_NAMES };
+  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, fixSignsByBalance, PARSERS, BANK_NAMES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.Parsers = api;
 })(typeof window !== 'undefined' ? window : globalThis);
