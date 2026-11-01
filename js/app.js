@@ -34,6 +34,12 @@
   function tlShort(kurus) {
     return (kurus < 0 ? '−' : '') + Math.round(Math.abs(kurus) / 100).toLocaleString('tr-TR') + ' ₺';
   }
+  // "2026-10-21" → "21 Eki 2026"
+  function shortDate(iso) {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${d} ${MONTHS[m - 1].slice(0, 3)} ${y}`;
+  }
   function monthLabel(ym) {
     const [y, m] = ym.split('-').map(Number);
     return `${MONTHS[m - 1]} ${y}`;
@@ -261,6 +267,7 @@
   function renderUpload() {
     const el = $('#screen-upload');
     const rules = db.learnedRules();
+    const imports = db.imports();
     const r = state.lastImport;
 
     el.innerHTML = `
@@ -274,6 +281,20 @@
       <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
 
       <div id="import-result">${r ? importResultHtml(r) : ''}</div>
+
+      <h2>Yüklenen ekstreler</h2>
+      <div class="card">
+        ${imports.length ? imports.map((x) => `
+          <div class="rule-row">
+            <span>
+              <b>${esc(x.bank)}</b> · ${esc(x.file_name)}
+              <small class="muted" style="display:block;margin-top:2px">
+                ${x.n ? `${x.n} işlem · ${shortDate(x.first_date)} – ${shortDate(x.last_date)}` : '0 işlem (hepsi önceden yüklenmişti)'}
+              </small>
+            </span>
+            <button class="link-btn" data-import="${x.id}">Sil</button>
+          </div>`).join('') : '<p class="muted small" style="margin:0">Henüz ekstre yüklenmedi.</p>'}
+      </div>
 
       <h2>Öğrenilen kurallar</h2>
       <div class="card">
@@ -294,6 +315,24 @@
       <div style="margin-top:8px"><button class="btn danger" id="wipe">Tüm verileri sil</button></div>`;
 
     $('#file-input').onchange = (e) => importFiles([...e.target.files]);
+    for (const b of el.querySelectorAll('[data-import]')) {
+      b.onclick = () => {
+        const x = imports.find((i) => i.id === Number(b.dataset.import));
+        confirmSheet(
+          'Ekstre silinsin mi?',
+          `${x.bank} · ${x.file_name}: bu ekstreden gelen ${x.n} işlem silinecek. Öğrenilen kuralların kalır. İstersen ekstreyi sonra tekrar yükleyebilirsin.`,
+          'Evet, sil',
+          async () => {
+            const n = db.deleteImport(x.id);
+            await db.save();
+            state.lastImport = null;
+            state.month = null;
+            toast(`Ekstre silindi · ${n} işlem kaldırıldı`);
+            render();
+          }
+        );
+      };
+    }
     for (const b of el.querySelectorAll('[data-rule]')) b.onclick = async () => { db.deleteRule(Number(b.dataset.rule)); await db.save(); render(); };
     $('#backup').onclick = downloadBackup;
     $('#restore-input').onchange = (e) => restoreBackup(e.target.files[0]);

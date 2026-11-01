@@ -404,6 +404,25 @@
         ORDER BY t.date DESC, t.id DESC`,
         { ':m': month || null, ':b': bank || null, ':c': categoryId == null ? null : categoryId });
     }
+    // Every statement file I uploaded, with how many transactions it brought in
+    imports() {
+      return this.all(`
+        SELECT i.id, i.file_name, i.imported_at, a.bank,
+               COUNT(t.id) AS n, MIN(t.date) AS first_date, MAX(t.date) AS last_date
+        FROM imports i
+        JOIN accounts a ON a.id = i.account_id
+        LEFT JOIN transactions t ON t.import_id = i.id
+        GROUP BY i.id
+        ORDER BY i.id DESC`);
+    }
+
+    // Delete a statement and every transaction it brought in
+    deleteImport(id) {
+      const removed = this.run('DELETE FROM transactions WHERE import_id = :id', { ':id': id });
+      this.run('DELETE FROM imports WHERE id = :id', { ':id': id });
+      return removed;
+    }
+
     learnedRules() {
       return this.all(`SELECT r.id, r.keyword, c.name AS category FROM rules r JOIN categories c ON c.id = r.category_id
                        WHERE r.source = 'learned' ORDER BY r.id DESC`);
