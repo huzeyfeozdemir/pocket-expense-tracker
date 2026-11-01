@@ -268,6 +268,7 @@
     const el = $('#screen-upload');
     const rules = db.learnedRules();
     const imports = db.imports();
+    const customCats = db.customCategories();
     const r = state.lastImport;
 
     el.innerHTML = `
@@ -294,6 +295,17 @@
             </span>
             <button class="link-btn" data-import="${x.id}">Sil</button>
           </div>`).join('') : '<p class="muted small" style="margin:0">Henüz ekstre yüklenmedi.</p>'}
+      </div>
+
+      <h2>Kategorilerim</h2>
+      <div class="card">
+        ${customCats.length ? customCats.map((c) => `
+          <div class="rule-row">
+            <span><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${c.color};margin-right:7px"></span><b>${esc(c.name)}</b>
+              <small class="muted"> · ${c.kind === 'income' ? 'Gelir' : 'Gider'} · ${c.n} işlem</small></span>
+            <button class="link-btn" data-delcat="${c.id}">Sil</button>
+          </div>`).join('') : '<p class="muted small" style="margin:0 0 10px">Kendi kategorilerini ekleyebilirsin (örn. Yurt ücreti, Spor salonu).</p>'}
+        <button class="btn ghost" id="add-category" style="margin-top:8px">+ Yeni kategori</button>
       </div>
 
       <h2>Öğrenilen kurallar</h2>
@@ -331,6 +343,18 @@
             render();
           }
         );
+      };
+    }
+    $('#add-category').onclick = () => openNewCategorySheet('expense');
+    for (const b of el.querySelectorAll('[data-delcat]')) {
+      b.onclick = () => {
+        const c = customCats.find((x) => x.id === Number(b.dataset.delcat));
+        confirmSheet('Kategori silinsin mi?', `"${c.name}" silinecek. İçindeki ${c.n} işlem tekrar inceleme kutusuna düşer; bu kategoriye bağlı kurallar da silinir.`, 'Evet, sil', async () => {
+          db.deleteCategory(c.id);
+          await db.save();
+          toast('Kategori silindi');
+          render();
+        });
       };
     }
     for (const b of el.querySelectorAll('[data-rule]')) b.onclick = async () => { db.deleteRule(Number(b.dataset.rule)); await db.save(); render(); };
@@ -446,6 +470,7 @@
       <h2>Hangi kategori?</h2>
       <div class="cat-grid" id="review-cats">
         ${cats.map((c) => `<button class="cat-btn" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`).join('')}
+        <button class="cat-btn cat-new" data-newcat="1"><span class="dot plus">+</span>Yeni kategori</button>
       </div>
 
       <label class="remember"><input type="checkbox" id="remember" ${suggestion ? 'checked' : ''}>
@@ -457,7 +482,13 @@
         <button class="btn" id="save" disabled>Kaydet</button>
       </div>`;
 
-    let chosen = tx.category_id || null;
+    let chosen = state.preselect || tx.category_id || null;
+    state.preselect = null;
+    el.querySelector('[data-newcat]').onclick = () =>
+      openNewCategorySheet(tx.amount_kurus < 0 ? 'expense' : 'income', (id) => {
+        state.preselect = id; // come back with the new category already selected
+        render();
+      });
     if (chosen) {
       const pre = el.querySelector(`[data-cat="${chosen}"]`);
       if (pre) pre.classList.add('on');
@@ -517,6 +548,7 @@
       <p class="small" style="word-break:break-word">${esc(tx.description)}</p>
       <div class="cat-grid">
         ${cats.map((c) => `<button class="cat-btn ${c.id === tx.category_id ? 'on' : ''}" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`).join('')}
+        <button class="cat-btn cat-new" data-newcat="1"><span class="dot plus">+</span>Yeni kategori</button>
       </div>
       <label class="remember"><input type="checkbox" id="sheet-remember">
         <span>Benzerlerini de hatırla:</span></label>
@@ -543,6 +575,15 @@
             render();
           };
         }
+        sheet.querySelector('[data-newcat]').onclick = () => {
+          const keyword = $('#sheet-remember').checked ? $('#sheet-keyword').value : '';
+          openNewCategorySheet(tx.amount_kurus < 0 ? 'expense' : 'income', async (id) => {
+            const others = db.setCategory(txId, id, keyword);
+            await db.save();
+            toast(others ? `Kategori eklendi · ${others} benzer işlem de` : 'Kategori eklendi ve işleme atandı');
+            render();
+          });
+        };
         let sign = tx.amount_kurus < 0 ? -1 : 1;
         for (const b of sheet.querySelectorAll('[data-sign]')) {
           b.onclick = () => {
@@ -606,6 +647,43 @@
           state.month = date.slice(0, 7);
           toast('Eklendi');
           render();
+        };
+      });
+  }
+
+  // "+ Yeni kategori" → name, type and color; onCreated(id) runs after saving
+  const PALETTE = ['#e07a5f', '#f2a65a', '#e9c46a', '#2a9d8f', '#00b4a6', '#5fa8d3', '#3d5a80', '#9b5de5', '#f15bb5', '#8d6e63', '#52b788', '#6c757d'];
+  function openNewCategorySheet(kind, onCreated) {
+    let color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    openSheet(`
+      <h3>Yeni kategori</h3>
+      <div class="field"><label>İsim</label><input type="text" id="nc-name" maxlength="30" placeholder="Örn. Yurt ücreti"></div>
+      <div class="field"><label>Türü</label>
+        <div class="seg"><button data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Gider</button><button data-kind="income" class="${kind === 'income' ? 'on' : ''}">Gelir</button></div>
+      </div>
+      <div class="field"><label>Renk</label>
+        <div class="swatches">${PALETTE.map((c) => `<button class="swatch ${c === color ? 'on' : ''}" data-color="${c}" style="background:${c}" aria-label="Renk"></button>`).join('')}</div>
+      </div>
+      <div class="btn-row"><button class="btn ghost" id="nc-cancel">Vazgeç</button><button class="btn" id="nc-save">Ekle</button></div>`,
+      (sheet) => {
+        $('#nc-name').focus();
+        for (const b of sheet.querySelectorAll('[data-kind]')) {
+          b.onclick = () => { kind = b.dataset.kind; for (const x of sheet.querySelectorAll('[data-kind]')) x.classList.toggle('on', x === b); };
+        }
+        for (const b of sheet.querySelectorAll('[data-color]')) {
+          b.onclick = () => { color = b.dataset.color; for (const x of sheet.querySelectorAll('[data-color]')) x.classList.toggle('on', x === b); };
+        }
+        $('#nc-cancel').onclick = closeSheet;
+        $('#nc-save').onclick = async () => {
+          try {
+            const id = db.addCategory($('#nc-name').value, kind, color);
+            await db.save();
+            closeSheet();
+            if (onCreated) await onCreated(id);
+            else { toast('Kategori eklendi'); render(); }
+          } catch (err) {
+            toast(err.message);
+          }
         };
       });
   }

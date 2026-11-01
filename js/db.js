@@ -189,6 +189,8 @@
     migrate() {
       const cols = this.all('PRAGMA table_info(transactions)').map((c) => c.name);
       if (!cols.includes('ocr')) this.db.run('ALTER TABLE transactions ADD COLUMN ocr INTEGER NOT NULL DEFAULT 0');
+      const catCols = this.all('PRAGMA table_info(categories)').map((c) => c.name);
+      if (!catCols.includes('custom')) this.db.run('ALTER TABLE categories ADD COLUMN custom INTEGER NOT NULL DEFAULT 0');
     }
 
     static async open(SQL, { persist = true } = {}) {
@@ -367,7 +369,28 @@
 
     // ---- Queries for the screens ----
     categories() {
-      return this.all('SELECT id, name, kind, color FROM categories ORDER BY kind, id');
+      return this.all('SELECT id, name, kind, color, custom FROM categories ORDER BY kind, id');
+    }
+
+    // ---- My own categories (e.g. "Yurt ücreti") ----
+    addCategory(name, kind, color) {
+      const clean = String(name).trim().replace(/\s+/g, ' ');
+      if (!clean) throw new Error('Kategoriye bir isim ver.');
+      const exists = this.one('SELECT id FROM categories WHERE lower(name) = lower(:n)', { ':n': clean });
+      if (exists) throw new Error('Bu isimde bir kategori zaten var.');
+      this.run('INSERT INTO categories (name, kind, color, custom) VALUES (:n, :k, :c, 1)', { ':n': clean, ':k': kind, ':c': color });
+      return this.one('SELECT last_insert_rowid() AS id').id;
+    }
+    customCategories() {
+      return this.all(`SELECT c.id, c.name, c.kind, c.color, COUNT(t.id) AS n
+                       FROM categories c LEFT JOIN transactions t ON t.category_id = c.id
+                       WHERE c.custom = 1 GROUP BY c.id ORDER BY c.kind, c.name`);
+    }
+    // Deleting a category: its transactions go back to the review box, its rules are removed
+    deleteCategory(id) {
+      this.run('UPDATE transactions SET category_id = NULL, needs_review = 1 WHERE category_id = :id', { ':id': id });
+      this.run('DELETE FROM rules WHERE category_id = :id', { ':id': id });
+      this.run('DELETE FROM categories WHERE id = :id AND custom = 1', { ':id': id });
     }
     months() {
       return this.all("SELECT DISTINCT strftime('%Y-%m', date) AS month FROM transactions ORDER BY month DESC").map((r) => r.month);

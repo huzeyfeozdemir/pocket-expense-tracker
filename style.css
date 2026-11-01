@@ -325,3 +325,8 @@ select, input[type="text"], input[type="number"], input[type="date"] {
 .add-btn { border: 0; background: var(--green); color: #fff; font-weight: 700; border-radius: 20px; padding: 8px 14px; cursor: pointer; }
 .fix-amount { background: var(--card); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
 .fix-amount summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.cat-new { border-style: dashed; color: var(--green); font-weight: 600; }
+.cat-new .dot.plus { background: var(--green-soft); color: var(--green); font-weight: 800; line-height: 18px; font-size: 16px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch { width: 32px; height: 32px; border-radius: 10px; border: 3px solid transparent; cursor: pointer; }
+.swatch.on { border-color: var(--text); }
