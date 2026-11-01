@@ -181,7 +181,14 @@
       this.db = bytes ? new SQL.Database(bytes) : new SQL.Database();
       this.db.run('PRAGMA foreign_keys = ON;');
       this.db.run(SCHEMA);
+      this.migrate();
       this.seed();
+    }
+
+    // Columns added after the first version: add them to databases created earlier
+    migrate() {
+      const cols = this.all('PRAGMA table_info(transactions)').map((c) => c.name);
+      if (!cols.includes('ocr')) this.db.run('ALTER TABLE transactions ADD COLUMN ocr INTEGER NOT NULL DEFAULT 0');
     }
 
     static async open(SQL, { persist = true } = {}) {
@@ -241,9 +248,9 @@
       for (const r of rows) {
         added += this.run(
           `INSERT OR IGNORE INTO transactions
-             (account_id, import_id, date, description, search_text, amount_kurus, source, fingerprint)
-           VALUES (:a, :i, :d, :desc, :s, :amt, 'import', :fp)`,
-          { ':a': accountId, ':i': importId, ':d': r.date, ':desc': r.description, ':s': normalize(r.description), ':amt': r.amountKurus, ':fp': r.fingerprint }
+             (account_id, import_id, date, description, search_text, amount_kurus, source, fingerprint, ocr)
+           VALUES (:a, :i, :d, :desc, :s, :amt, 'import', :fp, :ocr)`,
+          { ':a': accountId, ':i': importId, ':d': r.date, ':desc': r.description, ':s': normalize(r.description), ':amt': r.amountKurus, ':fp': r.fingerprint, ':ocr': r.uncertain ? 1 : 0 }
         );
       }
       this.db.run('COMMIT');
@@ -251,6 +258,8 @@
       const before = this.one('SELECT COUNT(*) AS n FROM transactions WHERE import_id = :i AND category_id IS NULL', { ':i': importId }).n;
       this.categorize();
       const transfers = this.detectTransfers();
+      // Rows read from a photo whose numbers did not add up: always ask me to check them
+      this.run('UPDATE transactions SET needs_review = 1 WHERE import_id = :i AND ocr = 1', { ':i': importId });
       const toReview = this.one('SELECT COUNT(*) AS n FROM transactions WHERE import_id = :i AND needs_review = 1', { ':i': importId }).n;
       return { found: rows.length, added, skipped: rows.length - added, autoCategorized: before - toReview, toReview, transfers };
     }
@@ -269,7 +278,7 @@
               LIMIT 1)
         WHERE category_id IS NULL`);
       // Whatever is still unknown goes to the review box
-      this.run('UPDATE transactions SET needs_review = CASE WHEN category_id IS NULL THEN 1 ELSE 0 END');
+      this.run('UPDATE transactions SET needs_review = 1 WHERE category_id IS NULL');
     }
 
     // ---- Money moved between my own accounts: same amount out of one, into another, within 2 days ----
@@ -300,14 +309,14 @@
     // ---- Review box ----
     reviewQueue() {
       return this.all(`
-        SELECT t.id, t.date, t.description, t.amount_kurus, a.bank
+        SELECT t.id, t.date, t.description, t.amount_kurus, t.category_id, t.ocr, a.bank
         FROM transactions t JOIN accounts a ON a.id = t.account_id
         WHERE t.needs_review = 1
         ORDER BY t.date DESC, t.id`);
     }
 
     setCategory(txId, categoryId, keyword) {
-      this.run('UPDATE transactions SET category_id = :c, needs_review = 0 WHERE id = :t', { ':c': categoryId, ':t': txId });
+      this.run('UPDATE transactions SET category_id = :c, needs_review = 0, ocr = 0 WHERE id = :t', { ':c': categoryId, ':t': txId });
       let alsoCategorized = 0;
       if (keyword && normalize(keyword).length >= 3) {
         const tx = this.one('SELECT amount_kurus FROM transactions WHERE id = :t', { ':t': txId });
@@ -413,6 +422,7 @@
       this.db.close();
       this.db = next;
       this.db.run(SCHEMA);
+      this.migrate();
       this.seed();
       await this.save();
     }
@@ -420,6 +430,7 @@
       this.db.close();
       this.db = new this.SQL.Database();
       this.db.run(SCHEMA);
+      this.migrate();
       this.seed();
       await this.save();
     }

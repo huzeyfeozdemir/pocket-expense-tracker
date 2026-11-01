@@ -75,10 +75,17 @@
   // ---------- Bank detection ----------
 
   function detectBank(items) {
-    const text = items.map((i) => i.str).join(' ').toUpperCase();
-    if (text.includes('KUVEYT TÜRK') || text.includes('KUVEYTTURK')) return 'kuveyt';
-    if (text.includes('YAPIKREDI') || text.includes('YAPI VE KREDI')) return 'yapikredi';
-    if (text.includes('ZIRAATBANK') || text.includes('ZİRAAT')) return 'ziraat';
+    // Compare without spaces and Turkish capitals, so OCR text like "www. ziraatbank" also matches
+    const text = items
+      .map((i) => i.str)
+      .join(' ')
+      .toUpperCase()
+      .replace(/İ/g, 'I')
+      .replace(/Ü/g, 'U')
+      .replace(/\s+/g, '');
+    if (text.includes('KUVEYTTURK')) return 'kuveyt';
+    if (text.includes('YAPIKREDI') || text.includes('YAPIVEKREDI')) return 'yapikredi';
+    if (text.includes('ZIRAAT')) return 'ziraat';
     return null;
   }
 
@@ -268,19 +275,103 @@
   }
 
   // Main entry: returns { bank, rows } or throws a readable error.
-  async function parseStatement(pdfjsLib, data) {
-    const items = await extractItems(pdfjsLib, data);
+  // ---------- Image-only PDFs (OCR) ----------
+  // Some banks (Ziraat's mobile app) save the statement as a picture. app.js turns the
+  // picture into text with OCR (Tesseract); here we turn that text into transactions.
+  // OCR can misread a digit, so every row is checked against the balance column.
+
+  function detectBankText(text) {
+    return detectBank([{ str: text }]);
+  }
+
+  function parseOcrZiraat(text) {
+    const money = '-?\\s?[\\d.]+,\\d{2}';
+    const lineRe = new RegExp('^(\\d{2}[.,]\\d{2}[.,]\\d{4})\\s*[—–-]?\\s*([A-Z]\\d{3,})?\\s+(.+?)\\s+(' + money + ')\\s+(' + money + ')\\s*$');
+    const rows = [];
+    for (const raw of text.split('\n')) {
+      const m = lineRe.exec(raw.trim());
+      if (!m) continue;
+      rows.push({
+        date: toIsoDate(m[1].replace(/,/g, '.')),
+        slip: m[2] || '',
+        description: m[3].replace(/\s+/g, ' ').trim(),
+        amountKurus: parseMoney(m[4].replace(/\s/g, '')),
+        balanceKurus: parseMoney(m[5]),
+      });
+    }
+    // The picture shows totals: "Borç: 0,00" (money out) and "Alacak: 4.000,00" (money in)
+    const total = (word) => {
+      const m = new RegExp(word + '\\s*:?\\s*([\\d.]+,\\d{2})').exec(text);
+      return m ? parseMoney(m[1]) : null;
+    };
+    const debitTotal = total('Bor[çc]');
+    const creditTotal = total('Alacak');
+
+    // Decide + or − from the balance: if the balance went up, money came in
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const abs = Math.abs(r.amountKurus);
+      const prev = rows[i - 1];
+      if (prev && prev.balanceKurus != null && r.balanceKurus != null) {
+        const diff = r.balanceKurus - prev.balanceKurus;
+        r.amountKurus = diff < 0 ? -abs : abs;
+        r.uncertain = Math.abs(diff) !== abs;
+      } else if (r.amountKurus < 0) {
+        r.uncertain = false;
+      } else {
+        r.amountKurus = abs; // first row: sign decided below from the printed totals
+        r.uncertain = debitTotal == null || creditTotal == null;
+      }
+    }
+    // First row: the sign that makes "Alacak" (money in) add up is the right one
+    if (rows.length && creditTotal != null) {
+      const first = rows[0];
+      const abs = Math.abs(first.amountKurus);
+      const otherIn = rows.slice(1).filter((r) => r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
+      first.amountKurus = otherIn + abs === creditTotal ? abs : -abs;
+    }
+    // Final check: the totals printed on the statement must match what we read
+    if (debitTotal != null && creditTotal != null) {
+      const inSum = rows.filter((r) => r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
+      const outSum = rows.filter((r) => r.amountKurus < 0).reduce((a, r) => a - r.amountKurus, 0);
+      if (inSum !== creditTotal || outSum !== debitTotal) rows.forEach((r) => (r.uncertain = true));
+    }
+    return rows.map((r) => ({
+      date: r.date,
+      description: r.description,
+      amountKurus: r.amountKurus,
+      balanceKurus: r.balanceKurus,
+      uncertain: !!r.uncertain,
+      fingerprint: `ZR|${r.date}|${r.slip}|${r.amountKurus}`,
+    }));
+  }
+
+  const OCR_PARSERS = { ziraat: parseOcrZiraat };
+
+  // Main entry: returns { bank, rows, ocr } or throws a readable error.
+  // options.ocrText(data) → Promise<string>: reads an image-only PDF (given by app.js in the browser)
+  async function parseStatement(pdfjsLib, data, options = {}) {
+    const items = await extractItems(pdfjsLib, data.slice()); // pdf.js takes over the buffer: give it a copy
     if (!items.length) {
-      throw new Error('Bu PDF\'te okunabilir metin yok (fotoğraf gibi kaydedilmiş). Ekstreyi internet şubesinden tekrar indir.');
+      if (!options.ocrText) {
+        throw new Error('Bu PDF\'te okunabilir metin yok (fotoğraf gibi kaydedilmiş).');
+      }
+      const text = await options.ocrText(data.slice());
+      const bank = detectBankText(text);
+      if (!bank) throw new Error('Fotoğraf okundu ama hangi bankaya ait olduğu anlaşılamadı.');
+      if (!OCR_PARSERS[bank]) throw new Error(`${BANK_NAMES[bank]} için fotoğraf ekstre henüz desteklenmiyor.`);
+      const rows = OCR_PARSERS[bank](text);
+      if (!rows.length) throw new Error('Fotoğraf okundu ama içinde işlem satırı bulunamadı.');
+      return { bank, rows, ocr: true };
     }
     const bank = detectBank(items);
     if (!bank) throw new Error('Bu ekstrenin hangi bankaya ait olduğu anlaşılamadı.');
     const rows = PARSERS[bank](items);
     if (!rows.length) throw new Error('Ekstrede işlem bulunamadı.');
-    return { bank, rows };
+    return { bank, rows, ocr: false };
   }
 
-  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, PARSERS, BANK_NAMES };
+  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, parseOcrZiraat, PARSERS, BANK_NAMES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.Parsers = api;
 })(typeof window !== 'undefined' ? window : globalThis);

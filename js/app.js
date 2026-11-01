@@ -314,6 +314,7 @@
       </div>` : `
       <div class="card result-ok" style="margin-top:12px">
         <b>✅ ${esc(r.bank)} · ${esc(r.file)}</b>
+        ${r.ocr ? `<p class="small muted" style="margin:4px 0 6px">📷 Fotoğraf PDF'ti, yazılar OCR ile okundu.${r.uncertain ? ` ${r.uncertain} satırın tutarı bakiyeyle tutmadı; inceleme kutusunda kontrol et.` : ' Tutarlar bakiyeyle kontrol edildi.'}</p>` : ''}
         <div class="result-line"><span>Bulunan işlem</span><b>${r.found}</b></div>
         <div class="result-line"><span>Yeni eklenen</span><b>${r.added}</b></div>
         ${r.skipped ? `<div class="result-line muted"><span>Zaten vardı, atlandı</span><b>${r.skipped}</b></div>` : ''}
@@ -330,10 +331,12 @@
     for (const file of files) {
       try {
         const data = new Uint8Array(await file.arrayBuffer());
-        const { bank, rows } = await Parsers.parseStatement(pdfjsLib, data);
+        const status = (text) => ($('#import-result').innerHTML = `<div class="card" style="margin-top:12px">${esc(file.name)}: ${esc(text)}</div>`);
+        status('okunuyor…');
+        const { bank, rows, ocr } = await Parsers.parseStatement(pdfjsLib, data, { ocrText: (d) => ocrPdf(d, status) });
         const bankName = Parsers.BANK_NAMES[bank];
         const res = db.importStatement(bankName, rows, file.name);
-        results.push({ file: file.name, bank: bankName, ...res });
+        results.push({ file: file.name, bank: bankName, ocr, uncertain: rows.filter((r) => r.uncertain).length, ...res });
       } catch (err) {
         console.error(err);
         results.push({ file: file.name, error: err.message || 'Dosya okunamadı.' });
@@ -343,6 +346,50 @@
     state.lastImport = results;
     state.month = null; // jump to the newest month
     render();
+  }
+
+  // ---------- OCR: reading statements saved as pictures ----------
+  // Tesseract (an open-source OCR engine) is large, so it is loaded only the first time it is needed.
+  let ocrWorker = null;
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('OCR dosyaları yüklenemedi. İnternet bağlantını kontrol et.'));
+      document.head.appendChild(s);
+    });
+  }
+  async function getOcrWorker(status) {
+    if (ocrWorker) return ocrWorker;
+    status('fotoğraf PDF — yazı tanıma (OCR) hazırlanıyor, ilk seferde biraz sürer…');
+    if (!window.Tesseract) await loadScript('lib/tesseract/tesseract.min.js');
+    ocrWorker = await Tesseract.createWorker('tur', 1, {
+      workerPath: 'lib/tesseract/worker.min.js',
+      corePath: 'lib/tesseract/',
+      langPath: 'lib/tesseract',
+      gzip: true,
+    });
+    await ocrWorker.setParameters({ preserve_interword_spaces: '1' });
+    return ocrWorker;
+  }
+  // Draw every page of the PDF as a picture, then read the text on it
+  async function ocrPdf(data, status) {
+    const worker = await getOcrWorker(status);
+    const doc = await pdfjsLib.getDocument({ data }).promise;
+    const texts = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      status(`fotoğraftaki yazılar okunuyor (sayfa ${p}/${doc.numPages})…`);
+      const page = await doc.getPage(p);
+      const viewport = page.getViewport({ scale: 3 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      const { data: result } = await worker.recognize(canvas);
+      texts.push(result.text);
+    }
+    return texts.join('\n');
   }
 
   function downloadBackup() {
@@ -397,6 +444,7 @@
         <div class="muted small">${dayLabel(tx.date)} · ${esc(tx.bank)}</div>
         <div class="desc">${esc(tx.description)}</div>
         <div class="big ${tx.amount_kurus > 0 ? 'pos' : ''}">${tl(tx.amount_kurus, { sign: true })}</div>
+        ${tx.ocr ? '<p class="small" style="margin:8px 0 0;color:#8a6100">📷 Bu satır fotoğraftan okundu ve bakiyeyle tutmadı. Tutarı ekstreyle karşılaştır.</p>' : ''}
       </div>
 
       <h2>Hangi kategori?</h2>
@@ -413,7 +461,12 @@
         <button class="btn" id="save" disabled>Kaydet</button>
       </div>`;
 
-    let chosen = null;
+    let chosen = tx.category_id || null;
+    if (chosen) {
+      const pre = el.querySelector(`[data-cat="${chosen}"]`);
+      if (pre) pre.classList.add('on');
+      $('#save').disabled = false;
+    }
     for (const b of el.querySelectorAll('[data-cat]')) {
       b.onclick = () => {
         chosen = Number(b.dataset.cat);

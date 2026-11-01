@@ -15,6 +15,8 @@ I use three banks (Kuveyt Türk, Yapı Kredi, Ziraat). My scholarship arrives in
 ## What it does (v1)
 
 - **Imports PDF statements** from Kuveyt Türk, Yapı Kredi and Ziraat — the bank is detected automatically
+- **Reads photo PDFs too:** when a bank app saves the statement as an image (Ziraat mobile), the text is read with OCR (Tesseract) and every amount is checked against the balance column
+- **Share from the bank app:** tap *Share* on a statement in the banking app and pick Cep Bütçe; the statement is imported directly (Web Share Target API, Android)
 - **Combines all accounts** into one monthly summary: income, expenses, balance, spending by category and by bank
 - **Categorizes automatically** with keyword rules (e.g. `NETFA` → Food, `TURKCELL` → Bills)
 - **Review box:** asks *"what is this?"* for transactions it cannot recognize, and **learns** the answer as a new rule
@@ -38,6 +40,7 @@ I approached it like a business analyst first, then built it:
 ### Interesting problems
 
 - **Reading PDFs by position.** Each bank prints its statement in columns. The parser finds the column headers and assigns every piece of text to a row and column by its x/y position. Descriptions that wrap over two lines are handled per bank (Kuveyt Türk wraps around the date line, Yapı Kredi wraps upwards, Ziraat splits columns across pages).
+- **Photo statements (OCR).** OCR can misread a digit, so each row is checked against the running balance and the printed debit/credit totals; rows that do not add up go to the review box. The same transaction read from a photo or from a text PDF gets the same fingerprint, so it is never counted twice.
 - **Money as whole numbers.** Amounts are stored in kuruş (`-200,00 TL` → `-20000`) to avoid floating-point rounding errors.
 - **Turkish characters in rules.** Bank texts mix `İ/I`, `Ş/S`, `Ö/O`. Every description is normalized before matching, so the rule `KREDI KARTI ODEME` also matches `KREDİ KARTI ÖDEME`.
 - **Duplicates.** Every row gets a fingerprint (date + bank reference / time + amount). A `UNIQUE (account_id, fingerprint)` constraint makes duplicates impossible at the database level.
@@ -72,3 +75,4 @@ Real bank statements are never committed to this repository (`.gitignore` blocks
 
 - [sql.js](https://github.com/sql-js/sql.js) (MIT) — SQLite compiled to WebAssembly
 - [pdf.js](https://github.com/mozilla/pdf.js) (Apache 2.0) — PDF text extraction
+- [Tesseract.js](https://github.com/naptha/tesseract.js) (Apache 2.0) — OCR for statements saved as images, with Turkish language data
