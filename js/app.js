@@ -12,6 +12,7 @@
   const state = {
     screen: 'home',
     month: null, // 'YYYY-MM'
+    span: 1, // how many months are shown, ending at `month` (1 or 3)
     bank: null, // filter on the list screen
     categoryId: null, // filter on the list screen (-1 = waiting for review)
     query: '', // search text on the list screen
@@ -44,6 +45,24 @@
   function monthLabel(ym) {
     const [y, m] = ym.split('-').map(Number);
     return `${MONTHS[m - 1]} ${y}`;
+  }
+  // "2026-10" + (-2) → "2026-08"
+  function addMonths(ym, n) {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(y, m - 1 + n, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+  // The months on screen: just `month`, or the 3 months ending at it
+  function period() {
+    return { from: addMonths(state.month, 1 - state.span), to: state.month };
+  }
+  // "Ağustos 2026", or "Ağu – Eki 2026" / "Kas 2025 – Oca 2026" for a range
+  function periodLabel({ from, to }) {
+    if (from === to) return monthLabel(to);
+    const short = (ym) => MONTHS[Number(ym.slice(5)) - 1].slice(0, 3);
+    return from.slice(0, 4) === to.slice(0, 4)
+      ? `${short(from)} – ${short(to)} ${to.slice(0, 4)}`
+      : `${short(from)} ${from.slice(0, 4)} – ${short(to)} ${to.slice(0, 4)}`;
   }
   function dayLabel(iso) {
     const d = new Date(iso + 'T12:00:00');
@@ -141,18 +160,26 @@
     }
 
     const i = months.indexOf(state.month);
-    const s = db.summary(state.month);
-    const pending = db.pendingInMonth(state.month);
-    const cats = db.byCategory(state.month);
-    const banks = db.byBank(state.month);
+    const { from, to } = period();
+    const s = db.summary(from, to);
+    const pending = db.pendingInMonth(from, to);
+    const cats = db.byCategory(from, to);
+    const banks = db.byBank(from, to);
     const balance = s.income - s.expense;
     const maxBank = Math.max(1, ...banks.map((b) => b.expense));
     // Shares are taken over the categories shown (a category whose refunds exceed its spending is left out)
     const catTotal = cats.reduce((sum, c) => sum + c.total, 0);
-    // Compared with the month before (only when that month has data)
-    const [py, pm] = state.month.split('-').map(Number);
-    const prevMonth = pm === 1 ? `${py - 1}-12` : `${py}-${String(pm - 1).padStart(2, '0')}`;
-    const prev = months.includes(prevMonth) ? db.summary(prevMonth) : null;
+    // Monthly view: compared with the month before (only when that month has data)
+    const prevMonth = addMonths(state.month, -1);
+    const prev = state.span === 1 && months.includes(prevMonth) ? db.summary(prevMonth) : null;
+    // 3-month view: each month on its own, and the monthly average
+    const monthRows = state.span === 1 ? [] : db.byMonth(from, to);
+    const perMonth = state.span === 1 ? [] : Array.from({ length: state.span }, (_, k) => {
+      const m = addMonths(from, k);
+      return monthRows.find((r) => r.month === m) || { month: m, income: 0, expense: 0 };
+    });
+    const maxMonth = Math.max(1, ...perMonth.map((m) => m.expense));
+    const avg = (kurus) => state.span > 1 ? `<div class="delta muted">ayda ${tlShort(kurus / state.span)}</div>` : '';
     const change = (now, before, goodWhenUp) => {
       if (!prev || !before) return '';
       const pct = Math.round(((now - before) / before) * 100);
@@ -163,15 +190,19 @@
 
     el.innerHTML = `
       <h1>Merhaba 👋</h1>
+      <div class="segmented">
+        <button class="${state.span === 1 ? 'on' : ''}" data-span="1">Aylık</button>
+        <button class="${state.span === 3 ? 'on' : ''}" data-span="3">3 Aylık</button>
+      </div>
       <div class="month-bar">
         <button class="icon-btn" id="prev-month" ${i >= months.length - 1 ? 'disabled' : ''} aria-label="Önceki ay">‹</button>
-        <span>${monthLabel(state.month)}</span>
+        <span>${periodLabel({ from, to })}</span>
         <button class="icon-btn" id="next-month" ${i <= 0 ? 'disabled' : ''} aria-label="Sonraki ay">›</button>
       </div>
 
       <div class="summary">
-        <div class="card"><div class="label">Gelir</div><div class="value pos">${tlShort(s.income)}</div>${change(s.income, prev && prev.income, true)}</div>
-        <div class="card"><div class="label">Gider</div><div class="value neg">${tlShort(s.expense)}</div>${change(s.expense, prev && prev.expense, false)}</div>
+        <div class="card"><div class="label">Gelir</div><div class="value pos">${tlShort(s.income)}</div>${change(s.income, prev && prev.income, true)}${avg(s.income)}</div>
+        <div class="card"><div class="label">Gider</div><div class="value neg">${tlShort(s.expense)}</div>${change(s.expense, prev && prev.expense, false)}${avg(s.expense)}</div>
         <div class="card"><div class="label">Kalan</div><div class="value">${tlShort(balance)}</div></div>
       </div>
 
@@ -180,6 +211,17 @@
           <span>🔍 ${pending.n} işlem seni bekliyor<small>Kategorisi belli olmayan işlemler toplamlara henüz dahil değil.</small></span>
           <span>İncele ›</span>
         </button>` : ''}
+
+      ${perMonth.length ? `
+        <h2>Aylara göre</h2>
+        <div class="card">
+          ${perMonth.map((m) => `
+            <button class="bar-row" data-homemonth="${m.month}">
+              <div class="top"><span>${monthLabel(m.month)}</span><b>${tl(-m.expense)}</b></div>
+              <div class="bar"><i style="width:${(m.expense / maxMonth) * 100}%"></i></div>
+              <div class="small muted" style="margin-top:4px">Gelen: ${tl(m.income)} · Kalan: ${tl(m.income - m.expense)}</div>
+            </button>`).join('')}
+        </div>` : ''}
 
       <h2>Harcamalar</h2>
       <div class="card">
@@ -193,7 +235,7 @@
               <b>${tl(c.total)}</b>
               <span class="chev">›</span>
             </button>`).join('')}
-` : '<p class="muted">Bu ay kategorilenmiş harcama yok.</p>'}
+` : `<p class="muted">${state.span === 1 ? 'Bu ay' : 'Bu dönemde'} kategorilenmiş harcama yok.</p>`}
       </div>
 
       <h2>Bankalara göre</h2>
@@ -208,7 +250,10 @@
 
     $('#prev-month').onclick = () => { state.month = months[i + 1]; render(); };
     $('#next-month').onclick = () => { state.month = months[i - 1]; render(); };
-    // Tap a category or a bank → its transactions for this month
+    for (const b of el.querySelectorAll('[data-span]')) b.onclick = () => { state.span = Number(b.dataset.span); render(); };
+    // Tap a month in the 3-month view → that month on its own
+    for (const b of el.querySelectorAll('[data-homemonth]')) b.onclick = () => { Object.assign(state, { month: b.dataset.homemonth, span: 1 }); render(); };
+    // Tap a category or a bank → its transactions for the months on screen
     for (const b of el.querySelectorAll('[data-homecat]')) {
       b.onclick = () => { Object.assign(state, { categoryId: Number(b.dataset.homecat), bank: null, query: '' }); show('list'); };
     }
@@ -242,7 +287,8 @@
     const months = ensureMonth();
     const banks = db.banks();
     const cats = db.categories();
-    const rows = months.length ? db.transactions({ month: state.month, bank: state.bank, categoryId: state.categoryId }) : [];
+    const { from, to } = period();
+    const rows = months.length ? db.transactions({ month: from, to, bank: state.bank, categoryId: state.categoryId }) : [];
     const group = (kind, label) => {
       const list = cats.filter((c) => c.kind === kind);
       return `<optgroup label="${label}">${list.map((c) => `<option value="${c.id}" ${state.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`;
@@ -252,7 +298,7 @@
       <div class="title-row"><h1>İşlemler</h1><button class="add-btn" id="add-cash">+ Nakit</button></div>
       ${months.length ? `
       <div class="field">
-        <select id="list-month">${months.map((m) => `<option value="${m}" ${m === state.month ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}</select>
+        <select id="list-month">${state.span > 1 ? `<option value="" selected>${state.span} ay: ${periodLabel({ from, to })}</option>` : ''}${months.map((m) => `<option value="${m}" ${state.span === 1 && m === state.month ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}</select>
       </div>` : ''}
       <div class="chips">
         <button class="chip ${!state.bank ? 'on' : ''}" data-bank="">Tümü</button>
@@ -293,7 +339,7 @@
     if (search) search.oninput = () => { state.query = search.value; drawRows(); };
 
     const monthSel = $('#list-month');
-    if (monthSel) monthSel.onchange = (e) => { state.month = e.target.value; render(); };
+    if (monthSel) monthSel.onchange = (e) => { if (e.target.value) Object.assign(state, { month: e.target.value, span: 1 }); render(); };
     $('#list-cat').onchange = (e) => { state.categoryId = e.target.value === '' ? null : Number(e.target.value); render(); };
     for (const chip of el.querySelectorAll('[data-bank]')) chip.onclick = () => { state.bank = chip.dataset.bank || null; render(); };
     $('#add-cash').onclick = openCashSheet;

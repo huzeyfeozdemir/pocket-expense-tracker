@@ -409,27 +409,28 @@
     banks() {
       return this.all('SELECT DISTINCT a.bank FROM accounts a JOIN transactions t ON t.account_id = a.id ORDER BY a.bank').map((r) => r.bank);
     }
-    summary(month) {
+    // The functions below take a month ('YYYY-MM') or a range of months (from, to)
+    summary(from, to = from) {
       return this.one(`
         SELECT
           COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
           COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
         FROM transactions t JOIN categories c ON c.id = t.category_id
-        WHERE strftime('%Y-%m', t.date) = :m`, { ':m': month });
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t`, { ':f': from, ':t': to });
     }
-    pendingInMonth(month) {
+    pendingInMonth(from, to = from) {
       return this.one(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_kurus), 0) AS total FROM transactions
-                       WHERE needs_review = 1 AND strftime('%Y-%m', date) = :m`, { ':m': month });
+                       WHERE needs_review = 1 AND strftime('%Y-%m', date) BETWEEN :f AND :t`, { ':f': from, ':t': to });
     }
-    byCategory(month) {
+    byCategory(from, to = from) {
       return this.all(`
         SELECT c.id, c.name, c.color, SUM(-t.amount_kurus) AS total
         FROM transactions t JOIN categories c ON c.id = t.category_id
-        WHERE c.kind = 'expense' AND strftime('%Y-%m', t.date) = :m
+        WHERE c.kind = 'expense' AND strftime('%Y-%m', t.date) BETWEEN :f AND :t
         GROUP BY c.id HAVING total > 0
-        ORDER BY total DESC`, { ':m': month });
+        ORDER BY total DESC`, { ':f': from, ':t': to });
     }
-    byBank(month) {
+    byBank(from, to = from) {
       return this.all(`
         SELECT a.bank,
                COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense,
@@ -437,21 +438,31 @@
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
         LEFT JOIN categories c ON c.id = t.category_id
-        WHERE strftime('%Y-%m', t.date) = :m
-        GROUP BY a.bank ORDER BY expense DESC`, { ':m': month });
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t
+        GROUP BY a.bank ORDER BY expense DESC`, { ':f': from, ':t': to });
     }
-    transactions({ month, bank, categoryId } = {}) {
+    // Income and spending of each month in the range
+    byMonth(from, to) {
+      return this.all(`
+        SELECT strftime('%Y-%m', t.date) AS month,
+               COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
+               COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
+        FROM transactions t JOIN categories c ON c.id = t.category_id
+        WHERE strftime('%Y-%m', t.date) BETWEEN :f AND :t
+        GROUP BY month ORDER BY month`, { ':f': from, ':t': to });
+    }
+    transactions({ month, to, bank, categoryId } = {}) {
       return this.all(`
         SELECT t.id, t.date, t.description, t.amount_kurus, t.needs_review, t.source,
                a.bank, c.id AS category_id, c.name AS category, c.kind, c.color
         FROM transactions t
         JOIN accounts a ON a.id = t.account_id
         LEFT JOIN categories c ON c.id = t.category_id
-        WHERE (:m IS NULL OR strftime('%Y-%m', t.date) = :m)
+        WHERE (:m IS NULL OR strftime('%Y-%m', t.date) BETWEEN :m AND :t)
           AND (:b IS NULL OR a.bank = :b)
           AND (:c IS NULL OR t.category_id = :c OR (:c = -1 AND t.needs_review = 1))
         ORDER BY t.date DESC, t.id DESC`,
-        { ':m': month || null, ':b': bank || null, ':c': categoryId == null ? null : categoryId });
+        { ':m': month || null, ':t': to || month || null, ':b': bank || null, ':c': categoryId == null ? null : categoryId });
     }
     // Every statement file I uploaded, with how many transactions it brought in
     imports() {
