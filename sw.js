@@ -1,10 +1,15 @@
 // Service worker: lets the phone install the site as an app and open it offline.
 // Strategy: always try the network first (so updates arrive right away);
 // if there is no internet, use the copy saved in the cache last time.
-const CACHE = 'cep-butce-v12';
+// Change this name with every release: that is how installed phones notice the new version.
+const CACHE = 'cep-butce-v13';
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) => event.waitUntil((async () => {
+  // Drop the copies saved by older versions (shared-files belongs to the share target below)
+  for (const key of await caches.keys()) if (key !== CACHE && key !== 'shared-files') await caches.delete(key);
+  await self.clients.claim();
+})()));
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;

@@ -484,8 +484,13 @@
       </div>`).join('');
   }
 
+  let importing = false; // a statement is being read (see watchForUpdates)
   async function importFiles(files) {
     if (!files.length) return;
+    importing = true;
+    try { await readFiles(files); } finally { importing = false; }
+  }
+  async function readFiles(files) {
     $('#import-result').innerHTML = '<div class="card" style="margin-top:12px">Okunuyor…</div>';
     const results = [];
     for (const file of files) {
@@ -878,6 +883,12 @@
       if (go) show(go.dataset.go);
     });
 
+    watchForUpdates();
+    if (sessionStorage.getItem('updated')) {
+      sessionStorage.removeItem('updated');
+      toast('Uygulama güncellendi');
+    }
+
     const shared = await takeSharedFiles();
     if (shared.length) {
       show('upload');
@@ -885,6 +896,26 @@
     } else {
       show('home');
     }
+  }
+
+  // New versions arrive without reinstalling: a release changes sw.js (bump CACHE there),
+  // the phone checks for it every time the app comes to the front, and once the new
+  // service worker takes over we reload the page so the new code runs. We wait if a
+  // statement is being read or a panel is open, so nothing the user is doing is lost.
+  function watchForUpdates() {
+    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return; // first visit: nothing to update
+    let ready = false;
+    const reloadIfIdle = () => {
+      if (!ready || importing || !$('#sheet').hidden) return;
+      sessionStorage.setItem('updated', '1');
+      location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', () => { ready = true; reloadIfIdle(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      reloadIfIdle();
+      navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update()).catch(() => {});
+    });
   }
 
   // Files shared from a bank app ("Paylaş" → Cep Bütçe).
