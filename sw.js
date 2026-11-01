@@ -1,7 +1,7 @@
 // Service worker: lets the phone install the site as an app and open it offline.
 // Strategy: always try the network first (so updates arrive right away);
 // if there is no internet, use the copy saved in the cache last time.
-const CACHE = 'cep-butce-v3';
+const CACHE = 'cep-butce-v4';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));

@@ -597,7 +597,7 @@
     for (const req of await cache.keys()) {
       const res = await cache.match(req);
       const name = decodeURIComponent(res.headers.get('X-File-Name') || 'ekstre.pdf');
-      files.push(new File([await res.blob()], name, { type: 'application/pdf' }));
+      files.push(new File([await res.blob()], name));
       await cache.delete(req);
     }
     return files;
