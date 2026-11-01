@@ -402,3 +402,7 @@ button.tip { cursor: pointer; }
 .cmp-row:last-child { border-bottom: 0; }
 .cmp-row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cmp-row b { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- v4: AI coach ---------- */
+.ai-answer { white-space: pre-wrap; font-size: 14.5px; line-height: 1.45; }
+.summary-text { width: 100%; height: 260px; font: inherit; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--text); margin-bottom: 10px; resize: vertical; }

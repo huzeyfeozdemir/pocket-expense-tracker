@@ -1,13 +1,15 @@
 /*
  * coach.js — the "Koç" screen's numbers: weekly Finance Score, tips, streaks and badges.
  *
- * Everything is worked out from the data on the phone with simple rules (no AI, nothing is sent).
+ * Score, tips, streaks and badges are worked out on the phone with simple rules (nothing is sent).
+ * v4 adds an optional AI coach at the bottom of this file: a monthly summary goes to Claude only
+ * when I press the button, with my own API key (or I copy the summary and paste it myself).
  * Statements arrive late, so "this week" means the 7 days ending at the newest transaction,
  * not the 7 days ending today. Only lira transactions count; euro is kept apart.
  *
  * Finance Score (0–100), like a sleep score:
  *   40  spending pace   this week's spending against a weekly allowance
- *                       (the budgets, or my usual weekly spending when there are none)
+ *                       (budgets for budgeted categories, my usual spending for the rest)
  *   25  budgets         how each budgeted category is doing so far this month
  *   25  saving          share of this month's income that is left over
  *   10  tidy            transactions waiting in the review box lower the score
@@ -29,15 +31,23 @@
   }
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
-  // What I may spend in a day: the budgets spread over the month, or my average day so far
+  // What I may spend in a day: budgeted categories count with their budget spread over the month,
+  // every other category with my average day for it so far (before `before`)
   function dailyAllowance(db, before) {
-    const budgetTotal = db.budgets().reduce((t, b) => t + b.budget, 0);
-    if (budgetTotal) return { kurus: budgetTotal / DAYS_PER_MONTH, fromBudgets: true };
+    const budgets = db.budgets();
+    let kurus = budgets.reduce((t, b) => t + b.budget, 0) / DAYS_PER_MONTH;
     const range = db.dataRange();
-    if (!range.first || range.first >= before) return null;
-    const days = Math.max(1, Math.round((Date.parse(before) - Date.parse(range.first)) / 864e5));
-    const spent = db.totalsBetween(range.first, addDays(before, -1)).expense;
-    return spent > 0 ? { kurus: spent / days, fromBudgets: false } : null;
+    if (range.first && range.first < before) {
+      const days = Math.max(1, Math.round((Date.parse(before) - Date.parse(range.first)) / 864e5));
+      const budgeted = budgets.map((b) => Number(b.id)).join(',') || '0';
+      const usual = db.one(`
+        SELECT COALESCE(SUM(-t.amount_kurus), 0) AS spent
+        FROM transactions t JOIN categories c ON c.id = t.category_id
+        WHERE c.kind = 'expense' AND t.currency = 'TRY' AND t.date >= :f AND t.date < :b
+          AND t.category_id NOT IN (${budgeted})`, { ':f': range.first, ':b': before }).spent;
+      kurus += Math.max(0, usual) / days;
+    }
+    return kurus > 0 ? { kurus, fromBudgets: budgets.length > 0 } : null;
   }
 
   // Score of the 7 days ending at `end`
@@ -201,5 +211,101 @@
     ];
   }
 
-  global.Coach = { weekScore, scores, scoreLabel, streaks, tips, badges, addDays };
+  // ---- v4: the AI coach ----
+  // Only this summary leaves the phone, and only when I ask: totals, categories, budgets, goals
+  // and the score. No transaction descriptions, names or IBANs.
+  const AI_INSTRUCTIONS =
+    'Sen bir üniversite öğrencisinin kişisel bütçe koçusun. Aşağıda bu ayın özeti var (Cep Bütçe uygulamasından). ' +
+    'Türkçe, samimi ve kısa yaz. Rakamlara dayanarak 3-5 somut öneri ver: neyi iyi yapıyorum, nerede kısabilirim, ' +
+    'bütçelerim ve hedeflerim için ne yapmalıyım. Hisse, kripto gibi yatırım tavsiyesi verme. En fazla 200 kelime.';
+
+  function monthSummary(db, tl, monthLabel) {
+    const months = db.months();
+    if (!months.length) return '';
+    const month = months[0];
+    const prev = months[1] && months[1] === prevMonthOf(month) ? months[1] : null;
+    const s = db.summary(month);
+    const last = db.dataRange().last.split('-').reverse().join('.'); // "2026-10-31" → "31.10.2026"
+    const lines = [`Ay: ${monthLabel(month)} (veriler ${last} tarihine kadar)`];
+    const rate = s.income > 0 ? `, birikim oranı %${Math.round(((s.income - s.expense) / s.income) * 100)}` : '';
+    lines.push(`Gelir: ${tl(s.income)} · Gider: ${tl(s.expense)} · Kalan: ${tl(s.income - s.expense)}${rate}`);
+    if (prev) {
+      const p = db.summary(prev);
+      lines.push(`Geçen ay (${monthLabel(prev)}): Gelir ${tl(p.income)} · Gider ${tl(p.expense)}`);
+    }
+    const before = new Map(prev ? db.byCategory(prev).map((c) => [c.id, c.total]) : []);
+    const cats = db.byCategory(month);
+    if (cats.length) {
+      lines.push(`Kategorilere göre harcama (bu ay${prev ? ' / geçen ay' : ''}):`);
+      for (const c of cats) lines.push(`- ${c.name}: ${tl(c.total)}${prev ? ` / ${tl(before.get(c.id) || 0)}` : ''}`);
+    }
+    const budgets = db.budgetStatus(month);
+    if (budgets.length) {
+      lines.push('Aylık bütçeler:');
+      for (const b of budgets) lines.push(`- ${b.name}: ${tl(b.spent)} / ${tl(b.budget)} (%${Math.round((b.spent / b.budget) * 100)})`);
+    } else {
+      lines.push('Bütçe konmamış.');
+    }
+    const goals = db.goals();
+    if (goals.length) {
+      lines.push('Birikim hedefleri:');
+      for (const g of goals) lines.push(`- ${g.name}: ${tl(g.saved)} / ${tl(g.target)}`);
+    }
+    const weeks = scores(db);
+    const w = weeks[weeks.length - 1];
+    if (w) {
+      lines.push(`Haftalık Finans Puanı: ${w.score}/100 (harcama hızı ${Math.round(w.parts.pace)}/40, bütçe ${Math.round(w.parts.budget)}/25, ` +
+        `birikim ${Math.round(w.parts.saving)}/25, düzen ${Math.round(w.parts.tidy)}/10). Son haftalar: ${weeks.map((x) => x.score).join(', ')}`);
+    }
+    const euro = db.summary(month, month, 'EUR');
+    if (euro.income || euro.expense) lines.push(`Euro (ayrı): Gelir ${tl(euro.income, { cur: 'EUR' })} · Gider ${tl(euro.expense, { cur: 'EUR' })}`);
+    const waiting = db.reviewQueue().length;
+    if (waiting) lines.push(`Kategorisi belirlenmemiş ${waiting} işlem var (toplamlara dahil değil).`);
+    return lines.join('\n');
+  }
+  function prevMonthOf(month) {
+    const [y, m] = month.split('-').map(Number);
+    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  }
+
+  // Ask Claude with my own API key, straight from the browser (there is no server).
+  // Throws an Error whose message can be shown to me.
+  async function askAI(apiKey, summary) {
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2026-10-21',
+          'anthropic-beta': 'server-side-fallback-2026-07-01',
+          'anthropic-dangerous-direct-browser-access': 'true', // the key is mine and stays on my phone
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-5-5',
+          max_tokens: 16000,
+          output_config: { effort: 'medium' },
+          fallbacks: 'default', // if the request is declined, the API retries it on another model
+          system: AI_INSTRUCTIONS,
+          messages: [{ role: 'user', content: summary }],
+        }),
+      });
+    } catch (err) {
+      throw new Error('Bağlantı kurulamadı. İnternetin açık mı?');
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('API anahtarı geçersiz. Koç ayarlarından kontrol et.');
+      if (res.status === 429) throw new Error('Çok sık soruldu; biraz bekleyip tekrar dene.');
+      if (res.status === 400 && data && /credit|balance/i.test(data.error && data.error.message)) throw new Error('API hesabında kredi kalmamış.');
+      throw new Error(`Koç cevap veremedi (${res.status}). Biraz sonra tekrar dene.`);
+    }
+    if (data.stop_reason === 'refusal') throw new Error('Koç bu özete cevap vermedi. Tekrar dene.');
+    const text = data.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    if (!text) throw new Error('Koçtan boş cevap geldi. Tekrar dene.');
+    return text;
+  }
+
+  global.Coach = { weekScore, scores, scoreLabel, streaks, tips, badges, addDays, monthSummary, askAI, AI_INSTRUCTIONS };
 })(window);

@@ -45,6 +45,12 @@ I use three banks (Kuveyt Türk, Yapı Kredi, Ziraat). My scholarship arrives in
 - **Streaks** (days in a row under the daily allowance, no-spend days) and **badges**
 - All rule-based and calculated on the phone; nothing is sent anywhere
 
+## v4 — AI coach (optional)
+
+- On the Koç screen, **"Özeti kopyala"** shows the monthly summary the coach would read (totals, categories, budgets, goals, score) and copies it with the instructions, ready to paste into the Claude app. Free, nothing is sent automatically
+- With my own Claude API key (stored only in the phone's browser, never in the backup), **"Koça sor"** sends that summary to Claude (`claude-opus-5-5`) and shows 3–5 personal suggestions in Turkish
+- Only the summary leaves the phone, and only when I press the button: no transaction descriptions, names or account numbers
+
 ## How it was built
 
 I approached it like a business analyst first, then built it:
@@ -73,7 +79,7 @@ I approached it like a business analyst first, then built it:
 ├── js/
 │   ├── parsers.js      PDF → transactions (one parser per bank)
 │   ├── ocr.js          photo statements: layout, digit re-reading, balance checks
-│   ├── coach.js        Finance Score, tips, streaks and badges (v3)
+│   ├── coach.js        Finance Score, tips, streaks, badges (v3) and the AI coach (v4)
 │   ├── db.js           SQLite database, rules, summaries
 │   └── app.js          screens and interactions
 ├── lib/                sql.js and pdf.js (third-party libraries)
@@ -87,11 +93,11 @@ I approached it like a business analyst first, then built it:
 
 - ~~**v2** — monthly budgets per category, saving goals, month-to-month comparison, euro support (for my Erasmus semester)~~ done
 - ~~**v3** — weekly "Finance Score", streaks and rule-based tips~~ done
-- **v4** — optional AI coach that reads the monthly summary
+- ~~**v4** — optional AI coach that reads the monthly summary~~ done
 
 ## Privacy
 
-Real bank statements are never committed to this repository (`.gitignore` blocks `*.pdf` and `private/`). The app sends no data anywhere: statements are read and stored inside the browser on the device.
+Real bank statements are never committed to this repository (`.gitignore` blocks `*.pdf` and `private/`). Statements are read and stored inside the browser on the device. The only thing that can ever leave the phone is the monthly summary for the optional AI coach, and only when I press "Koça sor" with my own API key.
 
 ## Third-party libraries
 

@@ -711,6 +711,7 @@
     const compare = before.size ? db.byCategory(month).map((c) => ({ ...c, before: before.get(c.id) || 0 })) : [];
     const scoreColor = (n) => (n >= 60 ? 'var(--green-2)' : n >= 40 ? '#e9a23b' : 'var(--red)');
     const PARTS = [['pace', 'Harcama hızı', 40], ['budget', 'Bütçe', 25], ['saving', 'Birikim', 25], ['tidy', 'Düzen', 10]];
+    const ai = lastAdvice();
 
     el.innerHTML = `
       <h1>Koç 🏋️</h1>
@@ -736,6 +737,19 @@
           <p class="muted">Ekstre yükleyince haftalık Finans Puanını ve ipuçlarını burada göreceksin.</p>
         </div>`}
 
+      ${week ? `
+        <h2>🤖 Yapay zekâ koçu</h2>
+        <div class="card ai-card">
+          ${ai ? `<div class="ai-answer">${formatAi(ai.text)}</div><div class="muted small" style="margin:8px 0 10px">${dayLabel(ai.at)} tarihli öneri</div>`
+            : '<p class="muted small" style="margin-top:0">Bu ayın özetini (toplamlar, kategoriler, bütçeler, hedefler, puan) Claude\'a gönder, sana özel öneriler al. İşlem açıklamaları, isimler ve hesap bilgileri gönderilmez.</p>'}
+          ${apiKey() ? `<button class="btn" id="ai-ask" ${aiAsking ? 'disabled' : ''}>${aiAsking ? 'Koç düşünüyor…' : ai ? 'Yeniden sor' : 'Koça sor'}</button>` : ''}
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn ghost" id="ai-copy">Özeti kopyala</button>
+            <button class="btn ghost" id="ai-key">${apiKey() ? 'API anahtarı' : 'API anahtarı ekle'}</button>
+          </div>
+          <p class="muted small" style="margin:8px 0 0">${apiKey() ? 'Her soru API hesabından ücretlendirilir.' : 'Ücretsiz yol: özeti kopyala, Claude uygulamasına yapıştır. Hiçbir şey otomatik gönderilmez.'}</p>
+        </div>` : ''}
+
       ${tips.length ? `
         <h2>İpuçları</h2>
         <div class="card">
@@ -749,7 +763,7 @@
           <div><b>${streak.best} gün</b><small class="muted">en iyi seri</small></div>
           <div><b>${streak.noSpendDays}</b><small class="muted">harcamasız gün (bu ay)</small></div>
         </div>
-        <p class="muted small">Günlük limit: ${tl(Math.round(streak.limit))} (${streak.fromBudgets ? 'bütçelerinden' : 'ortalama harcamandan'}).</p>` : ''}
+        <p class="muted small">Günlük limit: ${tl(Math.round(streak.limit))} (${streak.fromBudgets ? 'bütçelerin ve diğer kategorilerdeki ortalaman' : 'ortalama harcamandan'}).</p>` : ''}
 
       <h2>Rozetler · ${badges.filter((b) => b.earned).length}/${badges.length}</h2>
       <p class="muted small" style="margin-top:-4px">Küçük hedefler: yaptıkça rozet renklenir.</p>
@@ -807,8 +821,96 @@
         </div>` : ''}`;
 
     for (const id of ['#edit-budgets', '#edit-budgets-2']) if ($(id)) $(id).onclick = openBudgetSheet;
+    if ($('#ai-ask')) $('#ai-ask').onclick = askCoach;
+    if ($('#ai-copy')) $('#ai-copy').onclick = openSummarySheet;
+    if ($('#ai-key')) $('#ai-key').onclick = openApiKeySheet;
     $('#add-goal').onclick = () => openGoalSheet(null);
     for (const b of el.querySelectorAll('[data-goal]')) b.onclick = () => openGoalSheet(goals.find((g) => g.id === Number(b.dataset.goal)));
+  }
+
+  // ---- v4: AI coach ----
+  // The API key and the last answer live only in this phone's browser (never in the backup file).
+  const KEY_STORE = 'cep-butce-api-key';
+  const ADVICE_STORE = 'cep-butce-ai-advice';
+  function stored(name) { try { return localStorage.getItem(name); } catch (e) { return null; } }
+  function store(name, value) {
+    try { value == null ? localStorage.removeItem(name) : localStorage.setItem(name, value); } catch (e) { /* private mode: nothing is kept */ }
+  }
+  const apiKey = () => stored(KEY_STORE);
+  function lastAdvice() {
+    try { return JSON.parse(stored(ADVICE_STORE)); } catch (e) { return null; }
+  }
+  // The answer is plain text with a little markdown: keep line breaks, turn **x** into bold
+  function formatAi(text) {
+    return esc(text).replace(/^#+\s*/gm, '').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  }
+  const coachSummary = () => Coach.monthSummary(db, tl, monthLabel);
+
+  let aiAsking = false; // waiting for the coach (see watchForUpdates)
+  async function askCoach() {
+    aiAsking = true;
+    render();
+    try {
+      const text = await Coach.askAI(apiKey(), coachSummary());
+      store(ADVICE_STORE, JSON.stringify({ text, at: todayIso() }));
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      aiAsking = false;
+      if (state.screen === 'coach') render();
+    }
+  }
+
+  // Shows exactly what would be sent, and copies it to paste into the Claude app
+  function openSummarySheet() {
+    const text = `${Coach.AI_INSTRUCTIONS}\n\n${coachSummary()}`;
+    openSheet(`
+      <h3>Koç için özet</h3>
+      <p class="muted small" style="margin-top:0">Kopyala ve Claude uygulamasına (veya claude.ai'ye) yapıştır. "Koça sor" dediğinde de tam olarak bu gönderilir.</p>
+      <textarea id="ai-summary" class="summary-text" readonly>${esc(text)}</textarea>
+      <div class="btn-row"><button class="btn ghost" id="s-close">Kapat</button><button class="btn" id="s-copy">Kopyala</button></div>`,
+      () => {
+        $('#s-close').onclick = closeSheet;
+        $('#s-copy').onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch (err) {
+            const box = $('#ai-summary'); // older browsers: copy from the selected text box
+            box.select();
+            document.execCommand('copy');
+          }
+          closeSheet();
+          toast('Özet kopyalandı');
+        };
+      });
+  }
+
+  function openApiKeySheet() {
+    const has = !!apiKey();
+    openSheet(`
+      <h3>Claude API anahtarı</h3>
+      <p class="muted small" style="margin-top:0">"Koça sor" düğmesi için gerekir. Anahtarı console.anthropic.com'dan alırsın; kullanım ücretlidir (her soru birkaç kuruş tutar).
+        Anahtar sadece bu telefonun tarayıcısında saklanır, yedek dosyasına girmez. Özet, sadece düğmeye bastığında doğrudan Anthropic'e gönderilir.</p>
+      <div class="field"><input type="password" id="api-key" autocomplete="off" placeholder="${has ? 'Kayıtlı anahtar var · değiştirmek için yaz' : 'sk-ant-…'}"></div>
+      <div class="btn-row"><button class="btn ghost" id="k-cancel">Vazgeç</button><button class="btn" id="k-save">Kaydet</button></div>
+      ${has ? '<button class="btn danger" id="k-remove" style="margin-top:8px">Anahtarı sil</button>' : ''}`,
+      () => {
+        $('#k-cancel').onclick = closeSheet;
+        $('#k-save').onclick = () => {
+          const value = $('#api-key').value.trim();
+          if (!value) return toast('Anahtarı yapıştır.');
+          store(KEY_STORE, value);
+          closeSheet();
+          toast('Anahtar kaydedildi');
+          render();
+        };
+        if ($('#k-remove')) $('#k-remove').onclick = () => {
+          store(KEY_STORE, null);
+          closeSheet();
+          toast('Anahtar silindi');
+          render();
+        };
+      });
   }
 
   function scoreRing(score, color) {
@@ -1161,12 +1263,12 @@
   // New versions arrive without reinstalling: a release changes sw.js (bump CACHE there),
   // the phone checks for it every time the app comes to the front, and once the new
   // service worker takes over we reload the page so the new code runs. We wait if a
-  // statement is being read or a panel is open, so nothing the user is doing is lost.
+  // statement is being read, the coach is answering or a panel is open, so nothing is lost.
   function watchForUpdates() {
     if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return; // first visit: nothing to update
     let ready = false;
     const reloadIfIdle = () => {
-      if (!ready || importing || !$('#sheet').hidden) return;
+      if (!ready || importing || aiAsking || !$('#sheet').hidden) return;
       sessionStorage.setItem('updated', '1');
       location.reload();
     };
