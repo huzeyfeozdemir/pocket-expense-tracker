@@ -171,22 +171,33 @@
     return out;
   }
 
-  // ---- Badges ----
+  // ---- Badges: each says how to earn it and how far along I am ----
   function badges(db, streak) {
     const months = db.months();
     const has = (sql) => db.one(sql).n > 0;
+    const bankCount = db.banks().filter((b) => b !== 'Nakit').length;
+    const waiting = db.reviewQueue().length;
+    const bestGoal = db.goals().reduce((best, g) => Math.max(best, g.saved / g.target), 0);
     // A full month where every budget was kept (not the newest month: it may still be going)
     const keptMonth = db.budgets().length > 0 && months.slice(1).some((m) => db.budgetStatus(m).every((b) => b.spent <= b.budget));
     const savedMonth = months.some((m) => { const s = db.summary(m); return s.income > 0 && (s.income - s.expense) / s.income >= 0.2; });
     return [
-      { icon: '📄', name: 'İlk ekstre', earned: has('SELECT COUNT(*) AS n FROM imports') },
-      { icon: '🏦', name: '3 banka bir arada', earned: db.banks().filter((b) => b !== 'Nakit').length >= 3 },
-      { icon: '🧹', name: 'Temiz kutu', earned: months.length > 0 && db.reviewQueue().length === 0 },
-      { icon: '🔥', name: '7 gün seri', earned: streak.best >= 7 },
-      { icon: '⚡', name: '30 gün seri', earned: streak.best >= 30 },
-      { icon: '🎯', name: 'Bütçe ustası', earned: keptMonth },
-      { icon: '🐷', name: 'Birikimci', earned: savedMonth },
-      { icon: '🏆', name: 'Hedefe ulaştın', earned: db.goals().some((g) => g.saved >= g.target) },
+      { icon: '📄', name: 'İlk ekstre', how: 'İlk banka ekstreni yükle.',
+        earned: has('SELECT COUNT(*) AS n FROM imports') },
+      { icon: '🏦', name: '3 banka bir arada', how: '3 farklı bankanın ekstresini yükle.',
+        earned: bankCount >= 3, progress: `${Math.min(bankCount, 3)}/3 banka` },
+      { icon: '🧹', name: 'Temiz kutu', how: 'İnceleme kutusunda kategorisiz işlem bırakma.',
+        earned: months.length > 0 && waiting === 0, progress: waiting ? `${waiting} işlem bekliyor` : '' },
+      { icon: '🔥', name: '7 gün seri', how: '7 gün üst üste günlük limitinin altında harca.',
+        earned: streak.best >= 7, progress: `En iyi serin: ${streak.best} gün` },
+      { icon: '⚡', name: '30 gün seri', how: '30 gün üst üste günlük limitinin altında harca.',
+        earned: streak.best >= 30, progress: `En iyi serin: ${streak.best} gün` },
+      { icon: '🎯', name: 'Bütçe ustası', how: 'Bir ayı bütün bütçelerinin içinde kalarak bitir.',
+        earned: keptMonth, progress: db.budgets().length ? '' : 'Önce bütçe koy' },
+      { icon: '🐷', name: 'Birikimci', how: 'Bir ayda gelirinin en az %20\'sini biriktir.',
+        earned: savedMonth },
+      { icon: '🏆', name: 'Hedefe ulaştın', how: 'Bir birikim hedefini tamamla.',
+        earned: bestGoal >= 1, progress: bestGoal ? `En yakın hedef: %${Math.floor(bestGoal * 100)}` : 'Önce bir hedef ekle' },
     ];
   }
 

@@ -751,9 +751,15 @@
         </div>
         <p class="muted small">Günlük limit: ${tl(Math.round(streak.limit))} (${streak.fromBudgets ? 'bütçelerinden' : 'ortalama harcamandan'}).</p>` : ''}
 
-      <h2>Rozetler</h2>
-      <div class="badges">
-        ${badges.map((b) => `<div class="badge-item ${b.earned ? 'on' : ''}"><span>${b.icon}</span><small>${esc(b.name)}</small></div>`).join('')}
+      <h2>Rozetler · ${badges.filter((b) => b.earned).length}/${badges.length}</h2>
+      <p class="muted small" style="margin-top:-4px">Küçük hedefler: yaptıkça rozet renklenir.</p>
+      <div class="card">
+        ${badges.map((b) => `
+          <div class="badge-row ${b.earned ? 'on' : ''}">
+            <span class="icon">${b.icon}</span>
+            <span class="text"><b>${esc(b.name)}</b><small>${esc(b.how)}${!b.earned && b.progress ? ` · ${esc(b.progress)}` : ''}</small></span>
+            <span class="state">${b.earned ? '✓' : ''}</span>
+          </div>`).join('')}
       </div>
 
       <div class="title-row"><h2>Bütçeler · ${monthLabel(month)}</h2><button class="link-btn edit-btn" id="edit-budgets">Düzenle</button></div>
