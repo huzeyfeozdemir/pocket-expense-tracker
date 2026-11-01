@@ -34,7 +34,7 @@ Priority: **Must** = in this version · **Should** = if time allows · **Could**
 | 6 | As a user, I want the app to collect transactions it could not categorize in a **"To review"** list right after an import and **ask me** what each one is (e.g. "POS TMSZ DAVUTPASA CARSI — 200 TL: what is this?"), so I can label them in one go. | Must |
 | 7 | As a user, I want the app to skip transactions I already imported, so nothing is counted twice when statement periods overlap. | Must |
 | 8 | As a user, I want transfers between my own accounts to be **excluded** from income and expenses, so my totals are correct. | Must |
-| 8a | As a user, I want credit card bill payments handled without double counting: if the card's own statement is imported, the purchases are counted and the bill payment is excluded as a transfer; if it is not imported, the bill payment is counted as one expense in *Credit card (no details)*. | Must |
+| 8a | As a user, I want credit card bill payments handled without double counting: if the card's own statement is imported, the purchases are counted and the bill payment is excluded as a transfer; if it is not imported, the bill payment is counted as one expense in *Credit card (no details)*. The app recognizes bill payments by keywords in the description (e.g. "KREDİ KARTI ÖDEME"); if it is not sure, it asks me in the review box. | Must |
 | 9 | As a user, I want to see this month's total income, total expense and balance **across all banks combined**. | Must |
 | 10 | As a user, I want a chart of expenses by category for all banks combined. | Must |
 | 11 | As a user, I want to see all transactions in one list, newest first, and filter it by bank or category. | Must |
@@ -67,8 +67,8 @@ Priority: **Must** = in this version · **Should** = if time allows · **Could**
 
 ## 4. Categories (first version)
 
-**Expenses:** Food · Groceries · Transport · Bills (phone, internet) · Entertainment · Clothing · Subscriptions · Education · Sent to people · Other
-**Income:** Scholarship · Family · Salary · Other
+**Expenses:** Food · Groceries · Transport · Bills (phone, internet) · Entertainment · Clothing · Subscriptions · Education · Personal care · Shopping · Sent to people · Other
+**Income:** Scholarship · Family · Salary · Other income
 **Excluded from totals:** Transfer between my accounts · Credit card payment (only when the card statement is imported)
 **Fallback:** Credit card (no details) — used when the card statement is not imported
 
@@ -102,3 +102,7 @@ Real statements contain personal data (IBAN, address, names) and are **never** a
 
 - Do the banks offer Excel export? Excel is more reliable than PDF, because a small change in a PDF layout can break the import.
 - What do credit card statements look like (installments, statement period)? → planned after v1.
+
+## 10. Status
+
+v1 is implemented (November 2026). Credit card statement import, Excel/CSV import and the v2–v4 features are still open.

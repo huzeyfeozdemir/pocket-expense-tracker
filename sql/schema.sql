@@ -1,71 +1,61 @@
--- Pocket Expense Tracker — database schema (SQLite)
+-- Cep Bütçe — database schema (SQLite, runs inside the browser via sql.js)
+-- This is the same schema the app creates in js/db.js.
 -- Money is stored in kuruş (1 TL = 100 kuruş) as INTEGER to avoid rounding errors.
 -- Negative amount = money out, positive amount = money in.
+--
+-- accounts      my bank accounts, credit cards and cash wallet
+-- categories    spending / income categories; 'excluded' ones (transfers) never count in totals
+-- imports       every statement file I uploaded
+-- transactions  every transaction from every bank; search_text = description without Turkish letters
+-- rules         "if the description contains KEYWORD (and money goes in/out) → CATEGORY"
+--               default rules ship with the app, learned rules come from the review box
 
 PRAGMA foreign_keys = ON;
 
--- My bank accounts and credit cards
-CREATE TABLE accounts (
-    id    INTEGER PRIMARY KEY,
-    bank  TEXT NOT NULL,                          -- e.g. 'Kuveyt Türk'
-    name  TEXT NOT NULL,                          -- e.g. 'Vadesiz TL'
-    type  TEXT NOT NULL CHECK (type IN ('bank', 'credit_card'))
+CREATE TABLE IF NOT EXISTS accounts (
+  id    INTEGER PRIMARY KEY,
+  bank  TEXT NOT NULL,
+  name  TEXT NOT NULL,
+  type  TEXT NOT NULL CHECK (type IN ('bank', 'credit_card', 'cash')),
+  UNIQUE (bank, name)
 );
-
--- Spending / income categories
-CREATE TABLE categories (
-    id    INTEGER PRIMARY KEY,
-    name  TEXT NOT NULL UNIQUE,
-    kind  TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'excluded'))
+CREATE TABLE IF NOT EXISTS categories (
+  id    INTEGER PRIMARY KEY,
+  name  TEXT NOT NULL UNIQUE,
+  kind  TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'excluded')),
+  color TEXT NOT NULL DEFAULT '#9aa5a0'
 );
-
--- Every statement file I upload
-CREATE TABLE imports (
-    id          INTEGER PRIMARY KEY,
-    account_id  INTEGER NOT NULL REFERENCES accounts(id),
-    file_name   TEXT NOT NULL,
-    imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS imports (
+  id          INTEGER PRIMARY KEY,
+  account_id  INTEGER NOT NULL REFERENCES accounts(id),
+  file_name   TEXT NOT NULL,
+  imported_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
--- Every single transaction from every bank
-CREATE TABLE transactions (
-    id           INTEGER PRIMARY KEY,
-    account_id   INTEGER NOT NULL REFERENCES accounts(id),
-    import_id    INTEGER REFERENCES imports(id),     -- NULL for manual entries
-    date         TEXT NOT NULL,                      -- 'YYYY-MM-DD'
-    description  TEXT NOT NULL,                      -- as written in the statement
-    amount_kurus INTEGER NOT NULL,                   -- -20000 = -200,00 TL
-    currency     TEXT NOT NULL DEFAULT 'TRY',
-    category_id  INTEGER REFERENCES categories(id),  -- NULL until categorized
-    source       TEXT NOT NULL CHECK (source IN ('import', 'manual')),
-    needs_review INTEGER NOT NULL DEFAULT 0,         -- 1 = show in the review box
-    fingerprint  TEXT NOT NULL,                      -- unique key built from the statement line
-    UNIQUE (account_id, fingerprint)                 -- the same line can never be imported twice
+CREATE TABLE IF NOT EXISTS transactions (
+  id           INTEGER PRIMARY KEY,
+  account_id   INTEGER NOT NULL REFERENCES accounts(id),
+  import_id    INTEGER REFERENCES imports(id),
+  date         TEXT NOT NULL,
+  description  TEXT NOT NULL,
+  search_text  TEXT NOT NULL,
+  amount_kurus INTEGER NOT NULL,
+  currency     TEXT NOT NULL DEFAULT 'TRY',
+  category_id  INTEGER REFERENCES categories(id),
+  source       TEXT NOT NULL CHECK (source IN ('import', 'manual')),
+  needs_review INTEGER NOT NULL DEFAULT 0,
+  fingerprint  TEXT NOT NULL,
+  UNIQUE (account_id, fingerprint)
 );
-
--- "If the description contains X, the category is Y"
-CREATE TABLE rules (
-    id          INTEGER PRIMARY KEY,
-    keyword     TEXT NOT NULL UNIQUE,
-    category_id INTEGER NOT NULL REFERENCES categories(id)
+CREATE TABLE IF NOT EXISTS rules (
+  id          INTEGER PRIMARY KEY,
+  keyword     TEXT NOT NULL,
+  direction   TEXT NOT NULL DEFAULT 'any' CHECK (direction IN ('in', 'out', 'any')),
+  category_id INTEGER NOT NULL REFERENCES categories(id),
+  priority    INTEGER NOT NULL DEFAULT 50,
+  source      TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'learned')),
+  UNIQUE (keyword, direction)
 );
+CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
+CREATE INDEX IF NOT EXISTS idx_tx_review ON transactions(needs_review);
 
--- Starting categories
-INSERT INTO categories (name, kind) VALUES
-    ('Yemek', 'expense'), ('Market', 'expense'), ('Faturalar', 'expense'),
-    ('Ulaşım', 'expense'), ('Eğlence', 'expense'), ('Giyim', 'expense'),
-    ('Abonelik', 'expense'), ('Eğitim', 'expense'), ('Kişilere gönderim', 'expense'),
-    ('Kredi kartı (detaysız)', 'expense'), ('Diğer', 'expense'),
-    ('Burs', 'income'), ('Aile', 'income'), ('Maaş', 'income'), ('Diğer gelir', 'income'),
-    ('Hesaplar arası transfer', 'excluded'), ('Kredi kartı ödemesi', 'excluded');
-
--- Starting rules
-INSERT INTO rules (keyword, category_id) VALUES
-    ('NETFA',            (SELECT id FROM categories WHERE name = 'Yemek')),
-    ('A101',             (SELECT id FROM categories WHERE name = 'Market')),
-    ('TURKCELL',         (SELECT id FROM categories WHERE name = 'Faturalar')),
-    ('ISTANBULKART',     (SELECT id FROM categories WHERE name = 'Ulaşım')),
-    ('YEMEKSEPETI',      (SELECT id FROM categories WHERE name = 'Yemek')),
-    ('YOUTUBE',          (SELECT id FROM categories WHERE name = 'Abonelik')),
-    ('BURS',             (SELECT id FROM categories WHERE name = 'Burs')),
-    ('KREDI KARTI ODEME',(SELECT id FROM categories WHERE name = 'Kredi kartı (detaysız)'));
+-- Starting categories and rules are inserted by js/db.js (CATEGORIES, DEFAULT_RULES).

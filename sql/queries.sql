@@ -1,51 +1,59 @@
--- Pocket Expense Tracker — main queries used by the app
+-- Cep Bütçe — main queries used by the app (js/db.js)
+-- :m = month as 'YYYY-MM'
 
--- 1. Home screen: this month's income, expense and balance (all banks combined)
+-- 1. Home: total income and expense of a month, all banks combined
 SELECT
-    SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus ELSE 0 END) / 100.0 AS income_tl,
-    SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus ELSE 0 END) / 100.0 AS expense_tl,
-    SUM(CASE WHEN c.kind IN ('income', 'expense') THEN t.amount_kurus ELSE 0 END) / 100.0 AS balance_tl
+  COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0)  AS income,
+  COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense
 FROM transactions t
 JOIN categories c ON c.id = t.category_id
-WHERE strftime('%Y-%m', t.date) = '2026-10';
+WHERE strftime('%Y-%m', t.date) = :m;
 
--- 2. Home screen: expenses by category (for the chart)
-SELECT c.name AS category,
-       SUM(-t.amount_kurus) / 100.0 AS total_tl
+-- 2. Home: expenses by category (donut chart)
+SELECT c.name, c.color, SUM(-t.amount_kurus) AS total
 FROM transactions t
 JOIN categories c ON c.id = t.category_id
-WHERE c.kind = 'expense'
-  AND strftime('%Y-%m', t.date) = '2026-10'
-GROUP BY c.name
-ORDER BY total_tl DESC;
+WHERE c.kind = 'expense' AND strftime('%Y-%m', t.date) = :m
+GROUP BY c.id HAVING total > 0
+ORDER BY total DESC;
 
--- 3. Home screen: expenses by bank
+-- 3. Home: expenses and income by bank
 SELECT a.bank,
-       SUM(-t.amount_kurus) / 100.0 AS total_tl
-FROM transactions t
-JOIN accounts a   ON a.id = t.account_id
-JOIN categories c ON c.id = t.category_id
-WHERE c.kind = 'expense'
-  AND strftime('%Y-%m', t.date) = '2026-10'
-GROUP BY a.bank;
-
--- 4. Review box: transactions waiting for my answer
-SELECT t.id, t.date, a.bank, t.description, t.amount_kurus / 100.0 AS amount_tl
+       COALESCE(SUM(CASE WHEN c.kind = 'expense' THEN -t.amount_kurus END), 0) AS expense,
+       COALESCE(SUM(CASE WHEN c.kind = 'income'  THEN t.amount_kurus END), 0) AS income
 FROM transactions t
 JOIN accounts a ON a.id = t.account_id
-WHERE t.needs_review = 1
-ORDER BY t.date;
+LEFT JOIN categories c ON c.id = t.category_id
+WHERE strftime('%Y-%m', t.date) = :m
+GROUP BY a.bank ORDER BY expense DESC;
 
--- 5. After import: apply rules to transactions without a category
+-- 4. After an import: categorize with rules
+--    learned rules first, then by priority, then the longest (most specific) keyword
 UPDATE transactions
 SET category_id = (
-        SELECT r.category_id FROM rules r
-        WHERE upper(transactions.description) LIKE '%' || r.keyword || '%'
-        LIMIT 1),
-    needs_review = 0
-WHERE category_id IS NULL
-  AND EXISTS (SELECT 1 FROM rules r
-              WHERE upper(transactions.description) LIKE '%' || r.keyword || '%');
+      SELECT r.category_id FROM rules r
+      WHERE transactions.search_text LIKE '%' || r.keyword || '%'
+        AND (r.direction = 'any'
+             OR (r.direction = 'out' AND transactions.amount_kurus < 0)
+             OR (r.direction = 'in'  AND transactions.amount_kurus > 0))
+      ORDER BY r.source = 'learned' DESC, r.priority, length(r.keyword) DESC
+      LIMIT 1)
+WHERE category_id IS NULL;
 
--- 6. Everything still without a category goes to the review box
-UPDATE transactions SET needs_review = 1 WHERE category_id IS NULL;
+-- 5. Whatever is still unknown goes to the review box
+UPDATE transactions SET needs_review = CASE WHEN category_id IS NULL THEN 1 ELSE 0 END;
+
+-- 6. Transfers between my own accounts: same amount out of one account and into another within 2 days
+SELECT o.id AS out_id, i.id AS in_id
+FROM transactions o
+JOIN transactions i
+  ON i.amount_kurus = -o.amount_kurus
+ AND i.account_id <> o.account_id
+ AND abs(julianday(i.date) - julianday(o.date)) <= 2
+WHERE o.amount_kurus < 0;
+
+-- 7. Review box
+SELECT t.id, t.date, t.description, t.amount_kurus, a.bank
+FROM transactions t JOIN accounts a ON a.id = t.account_id
+WHERE t.needs_review = 1
+ORDER BY t.date DESC, t.id;
