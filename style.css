@@ -211,6 +211,8 @@ select, input[type="text"], input[type="password"], input[type="search"], input[
 .result-err { border-left: 4px solid var(--red); }
 .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .rule-row:last-child { border-bottom: 0; }
+.rule-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rule-row .link-btn { flex-shrink: 0; }
 .link-btn { border: 0; background: none; color: var(--red); cursor: pointer; font-size: 13px; }
 
 /* ---------- Review ---------- */
