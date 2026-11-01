@@ -577,7 +577,30 @@
       const go = e.target.closest('[data-go]');
       if (go) show(go.dataset.go);
     });
-    show('home');
+
+    const shared = await takeSharedFiles();
+    if (shared.length) {
+      show('upload');
+      await importFiles(shared);
+    } else {
+      show('home');
+    }
+  }
+
+  // Files shared from a bank app ("Paylaş" → Cep Bütçe).
+  // The service worker (sw.js) received them and put them in a cache; we pick them up here.
+  async function takeSharedFiles() {
+    if (!new URLSearchParams(location.search).has('shared') || !('caches' in window)) return [];
+    history.replaceState(null, '', location.pathname); // clean the address so a refresh does not re-import
+    const cache = await caches.open('shared-files');
+    const files = [];
+    for (const req of await cache.keys()) {
+      const res = await cache.match(req);
+      const name = decodeURIComponent(res.headers.get('X-File-Name') || 'ekstre.pdf');
+      files.push(new File([await res.blob()], name, { type: 'application/pdf' }));
+      await cache.delete(req);
+    }
+    return files;
   }
 
   start();
