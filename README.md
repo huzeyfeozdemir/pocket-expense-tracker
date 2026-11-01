@@ -23,6 +23,10 @@ I use three banks (Kuveyt Türk, Yapı Kredi, Ziraat). My scholarship arrives in
 - **No double counting:** the same statement line is never imported twice; transfers between my own accounts are excluded from totals
 - **Manage statements:** see every uploaded statement (bank, period, number of transactions) and delete one together with its transactions
 - **Cash entries** for spending that never shows up on a statement
+- **Password-protected PDFs:** asks for the statement password and opens it
+- **Refunds** (`İADE`) go back into the shop's category and lower that spending instead of counting as income
+- **Search and drill-down:** tap a category or bank on the home screen to see its transactions; search the list by text or amount, with in/out totals
+- **Month-to-month comparison** of income and spending on the home screen
 - **Private by design:** all data stays on the phone (SQLite in the browser); backup / restore as a file
 - Installable as an app (PWA) and works offline
 

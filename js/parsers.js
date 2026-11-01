@@ -48,19 +48,26 @@
       .replace(/\s+,/g, ',')
       .trim();
 
+  // pdf.js sometimes joins neighbouring header words into one piece ("Referans Kodu"),
+  // so a header matches when the piece is the word itself or starts with it.
+  const isWord = (item, word) => {
+    const s = item.str.trim();
+    return s === word || s.startsWith(word + ' ');
+  };
+
   function findHeader(items, word) {
-    return items.find((i) => i.str.trim() === word);
+    return items.find((i) => isWord(i, word));
   }
 
   // True for the column-header line itself (it must never become part of a description).
   function isHeaderLine(item, descH) {
-    return item.str.trim() === 'Açıklama' || (item.page === descH.page && item.y >= descH.y - 3);
+    return isWord(item, 'Açıklama') || (item.page === descH.page && item.y >= descH.y - 3);
   }
 
   // A header word that sits on the same line as the "Açıklama" header
   // (the same word can also appear elsewhere, e.g. "Kullanılabilir Bakiye").
   function headerOnLine(items, lineItem, word, filter = () => true) {
-    return items.find((i) => i.str.trim() === word && Math.abs(i.y - lineItem.y) <= 8 && i.page === lineItem.page && filter(i));
+    return items.find((i) => isWord(i, word) && Math.abs(i.y - lineItem.y) <= 8 && i.page === lineItem.page && filter(i));
   }
 
   function groupByPage(items) {
@@ -198,6 +205,7 @@
   // Exported from Excel: the columns can be split over several pages
   // (page 1: Tarih + Fiş No, page 2: Açıklama + İşlem Tutarı + Bakiye).
   // Rows on the two pages line up at the same height (y).
+  const SLIP = /^[A-Z]\d{3,}$/; // Ziraat "Fiş No", e.g. A1234
   function parseZiraat(items) {
     const pages = groupByPage(items);
     const datePages = [];
@@ -209,7 +217,7 @@
         .map((d) => ({
           y: d.y,
           date: toIsoDate(d.str),
-          slip: (pageItems.find((i) => sameLine(i, d) && /^[A-Z]\d{3,}$/.test(i.str.trim())) || {}).str || '',
+          slip: (pageItems.find((i) => sameLine(i, d) && SLIP.test(i.str.trim())) || {}).str || '',
         }));
 
       const amtH = pageItems.find((i) => /^(İşlem )?Tutar(ı)?$/.test(i.str.trim()));
@@ -228,7 +236,9 @@
           if (amountKurus === null) continue;
           data.push({
             y,
-            description: joinText(line.filter((i) => i.x < amtH.x - 10 && i.x > 20)),
+            // When the whole table fits on one page, the date and slip number sit on the
+            // same line: they are not part of the description.
+            description: joinText(line.filter((i) => i.x < amtH.x - 10 && i.x > 20 && !toIsoDate(i.str) && !SLIP.test(i.str.trim()))),
             amountKurus,
             balanceKurus: parseMoney(line.filter((i) => i.x >= balH.x).map((i) => i.str).join('')),
           });
@@ -300,8 +310,8 @@
 
   // ---------- Reading the PDF ----------
 
-  async function extractItems(pdfjsLib, data) {
-    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true, verbosity: 0 }).promise;
+  async function extractItems(pdfjsLib, data, password) {
+    const doc = await pdfjsLib.getDocument({ data, password, disableFontFace: true, verbosity: 0 }).promise;
     const items = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
@@ -315,11 +325,20 @@
 
   // Main entry: returns { bank, rows, ocr } or throws a readable error.
   // options.ocr(data) → Promise<{ text, rows }>: reads an image-only PDF (js/ocr.js, browser only)
+  // options.password: for statements the bank locks with a password (pdf.js throws PasswordException without it)
   async function parseStatement(pdfjsLib, data, options = {}) {
-    const items = await extractItems(pdfjsLib, data.slice()); // pdf.js takes over the buffer: give it a copy
+    let items;
+    try {
+      items = await extractItems(pdfjsLib, data.slice(), options.password); // pdf.js takes over the buffer: give it a copy
+    } catch (err) {
+      if (err && err.name === 'InvalidPDFException') {
+        throw new Error('Bu dosya bir PDF değil. Ekstreyi bankanın uygulamasından PDF olarak indirip tekrar dene.');
+      }
+      throw err; // PasswordException is handled by the caller (asks for the password)
+    }
     if (!items.length) {
       if (!options.ocr) throw new Error('Bu PDF\'te okunabilir metin yok (fotoğraf gibi kaydedilmiş).');
-      const { text, rows } = await options.ocr(data.slice());
+      const { text, rows } = await options.ocr(data.slice(), options.password);
       const bank = detectBankText(text);
       if (!bank) throw new Error('Fotoğraf okundu ama hangi bankaya ait olduğu anlaşılamadı.');
       if (bank !== 'ziraat') throw new Error(`${BANK_NAMES[bank]} için fotoğraf ekstre henüz desteklenmiyor.`);

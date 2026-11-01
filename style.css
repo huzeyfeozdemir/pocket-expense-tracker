@@ -135,7 +135,7 @@ button { font: inherit; color: inherit; }
 }
 .chip.on { background: var(--green); color: #fff; border-color: var(--green); }
 
-select, input[type="text"], input[type="number"], input[type="date"] {
+select, input[type="text"], input[type="password"], input[type="search"], input[type="number"], input[type="date"] {
   width: 100%;
   font: inherit;
   font-size: 15px;
@@ -330,3 +330,22 @@ select, input[type="text"], input[type="number"], input[type="date"] {
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .swatch { width: 32px; height: 32px; border-radius: 10px; border: 3px solid transparent; cursor: pointer; }
 .swatch.on { border-color: var(--text); }
+
+/* ---------- Added: clickable summary rows, list totals, category sections ---------- */
+button.cat-line, button.bar-row {
+  width: 100%;
+  background: none;
+  border-left: 0; border-right: 0; border-bottom: 0;
+  text-align: left;
+  cursor: pointer;
+}
+button.bar-row { display: block; border-top: 0; border-bottom: 1px solid var(--line); }
+button.bar-row:last-child { border-bottom: 0; }
+.cat-line .chev { color: var(--muted); }
+.list-total { margin: 2px 2px 4px; }
+.cat-sec { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); margin: 8px 2px 0; }
+.refund { margin: -4px 0 14px; }
+.refund summary { font-size: 13.5px; color: var(--green); cursor: pointer; padding: 4px 2px; }
+.refund .cat-grid { margin-top: 8px; }
+.banner > span:last-child { white-space: nowrap; flex: none; }
+.summary .delta { font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -279,6 +279,17 @@
               ORDER BY r.source = 'learned' DESC, r.priority, length(r.keyword) DESC
               LIMIT 1)
         WHERE category_id IS NULL`);
+      // A refund ("İADE") from a known shop goes back into that shop's category: it lowers the spending there
+      this.run(`
+        UPDATE transactions
+        SET category_id = (
+              SELECT r.category_id FROM rules r JOIN categories c ON c.id = r.category_id
+              WHERE c.kind = 'expense' AND r.direction IN ('out', 'any')
+                AND transactions.search_text LIKE '%' || r.keyword || '%'
+              ORDER BY r.source = 'learned' DESC, r.priority, length(r.keyword) DESC
+              LIMIT 1)
+        WHERE category_id IS NULL AND amount_kurus > 0
+          AND (search_text LIKE '%IADE%' OR search_text LIKE '%IPTAL%')`);
       // Whatever is still unknown goes to the review box
       this.run('UPDATE transactions SET needs_review = 1 WHERE category_id IS NULL');
     }
@@ -412,7 +423,7 @@
     }
     byCategory(month) {
       return this.all(`
-        SELECT c.name, c.color, SUM(-t.amount_kurus) AS total
+        SELECT c.id, c.name, c.color, SUM(-t.amount_kurus) AS total
         FROM transactions t JOIN categories c ON c.id = t.category_id
         WHERE c.kind = 'expense' AND strftime('%Y-%m', t.date) = :m
         GROUP BY c.id HAVING total > 0
@@ -454,10 +465,24 @@
         ORDER BY i.id DESC`);
     }
 
-    // Delete a statement and every transaction it brought in
+    // Delete a statement and every transaction it brought in.
+    // A transfer whose other half was in this statement is no longer a transfer: it goes back
+    // to the rules / review box (and may pair with another statement again).
     deleteImport(id) {
+      const partners = this.all(`
+        SELECT DISTINCT o.id FROM transactions d
+        JOIN categories dc ON dc.id = d.category_id AND dc.name = 'Hesaplar arası transfer'
+        JOIN transactions o ON o.amount_kurus = -d.amount_kurus AND o.account_id <> d.account_id
+         AND abs(julianday(o.date) - julianday(d.date)) <= 2 AND o.category_id = d.category_id
+         AND (o.import_id IS NULL OR o.import_id <> :id)
+        WHERE d.import_id = :id`, { ':id': id }).map((r) => r.id);
       const removed = this.run('DELETE FROM transactions WHERE import_id = :id', { ':id': id });
       this.run('DELETE FROM imports WHERE id = :id', { ':id': id });
+      if (partners.length) {
+        this.run(`UPDATE transactions SET category_id = NULL WHERE id IN (${partners.map(Number).join(',')})`);
+        this.categorize();
+        this.detectTransfers();
+      }
       return removed;
     }
 

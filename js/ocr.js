@@ -213,9 +213,9 @@
 
   // ---------- Main ----------
 
-  async function readImageStatement(pdfjsLib, data, status = () => {}) {
+  async function readImageStatement(pdfjsLib, data, status = () => {}, password) {
     await getWorkers(status);
-    const doc = await pdfjsLib.getDocument({ data }).promise;
+    const doc = await pdfjsLib.getDocument({ data, password }).promise;
     const allRows = [];
     const debitReads = [];
     const creditReads = [];

@@ -14,6 +14,7 @@
     month: null, // 'YYYY-MM'
     bank: null, // filter on the list screen
     categoryId: null, // filter on the list screen (-1 = waiting for review)
+    query: '', // search text on the list screen
     reviewIndex: 0,
     lastImport: null, // result card on the upload screen
   };
@@ -81,6 +82,17 @@
       .replace(/(^|\s)\S/g, (c) => c.toLocaleUpperCase('tr-TR'));
   }
 
+  // What people type on a Turkish keyboard: "45,5" · "1.250,75" · "1250.75" · "1 250" → kuruş (or null)
+  function parseAmount(text) {
+    let s = String(text).replace(/[\s₺TL]/gi, '');
+    if (!s) return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.'); // comma = decimal point, dots = thousands
+    else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); // "1.250" = one thousand two hundred fifty
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    const kurus = Math.round(parseFloat(s) * 100);
+    return kurus > 0 ? kurus : null;
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
 
   // ---------- Navigation ----------
@@ -135,6 +147,19 @@
     const banks = db.byBank(state.month);
     const balance = s.income - s.expense;
     const maxBank = Math.max(1, ...banks.map((b) => b.expense));
+    // Shares are taken over the categories shown (a category whose refunds exceed its spending is left out)
+    const catTotal = cats.reduce((sum, c) => sum + c.total, 0);
+    // Compared with the month before (only when that month has data)
+    const [py, pm] = state.month.split('-').map(Number);
+    const prevMonth = pm === 1 ? `${py - 1}-12` : `${py}-${String(pm - 1).padStart(2, '0')}`;
+    const prev = months.includes(prevMonth) ? db.summary(prevMonth) : null;
+    const change = (now, before, goodWhenUp) => {
+      if (!prev || !before) return '';
+      const pct = Math.round(((now - before) / before) * 100);
+      if (pct === 0) return '<div class="delta muted">= geçen ay</div>';
+      const good = pct > 0 === goodWhenUp;
+      return `<div class="delta ${good ? 'pos' : 'neg'}" title="${monthLabel(prevMonth)} ayına göre">${pct > 0 ? '▲' : '▼'} %${Math.abs(pct)} <span class="muted">· ${MONTHS[Number(prevMonth.slice(5)) - 1].slice(0, 3)}</span></div>`;
+    };
 
     el.innerHTML = `
       <h1>Merhaba 👋</h1>
@@ -145,8 +170,8 @@
       </div>
 
       <div class="summary">
-        <div class="card"><div class="label">Gelir</div><div class="value pos">${tlShort(s.income)}</div></div>
-        <div class="card"><div class="label">Gider</div><div class="value neg">${tlShort(s.expense)}</div></div>
+        <div class="card"><div class="label">Gelir</div><div class="value pos">${tlShort(s.income)}</div>${change(s.income, prev && prev.income, true)}</div>
+        <div class="card"><div class="label">Gider</div><div class="value neg">${tlShort(s.expense)}</div>${change(s.expense, prev && prev.expense, false)}</div>
         <div class="card"><div class="label">Kalan</div><div class="value">${tlShort(balance)}</div></div>
       </div>
 
@@ -159,29 +184,37 @@
       <h2>Harcamalar</h2>
       <div class="card">
         ${cats.length ? `
-          <div class="donut-center">${donutSvg(cats, s.expense)}</div>
+          <div class="donut-center">${donutSvg(cats, catTotal)}</div>
           ${cats.map((c) => `
-            <div class="cat-line">
+            <button class="cat-line" data-homecat="${c.id}">
               <span class="dot" style="background:${c.color}"></span>
               <span class="name">${esc(c.name)}</span>
-              <span class="pct">%${Math.round((c.total / s.expense) * 100)}</span>
+              <span class="pct">%${Math.round((c.total / catTotal) * 100)}</span>
               <b>${tl(c.total)}</b>
-            </div>`).join('')}
+              <span class="chev">›</span>
+            </button>`).join('')}
 ` : '<p class="muted">Bu ay kategorilenmiş harcama yok.</p>'}
       </div>
 
       <h2>Bankalara göre</h2>
       <div class="card">
         ${banks.map((b) => `
-          <div class="bar-row">
+          <button class="bar-row" data-homebank="${esc(b.bank)}">
             <div class="top"><span>${esc(b.bank)}</span><b>${tl(-b.expense)}</b></div>
             <div class="bar"><i style="width:${(b.expense / maxBank) * 100}%"></i></div>
             ${b.income ? `<div class="small muted" style="margin-top:4px">Gelen: ${tl(b.income)}</div>` : ''}
-          </div>`).join('')}
+          </button>`).join('')}
       </div>`;
 
     $('#prev-month').onclick = () => { state.month = months[i + 1]; render(); };
     $('#next-month').onclick = () => { state.month = months[i - 1]; render(); };
+    // Tap a category or a bank → its transactions for this month
+    for (const b of el.querySelectorAll('[data-homecat]')) {
+      b.onclick = () => { Object.assign(state, { categoryId: Number(b.dataset.homecat), bank: null, query: '' }); show('list'); };
+    }
+    for (const b of el.querySelectorAll('[data-homebank]')) {
+      b.onclick = () => { Object.assign(state, { bank: b.dataset.homebank, categoryId: null, query: '' }); show('list'); };
+    }
   }
 
   // A ring chart made of SVG arcs, one per category
@@ -210,12 +243,10 @@
     const banks = db.banks();
     const cats = db.categories();
     const rows = months.length ? db.transactions({ month: state.month, bank: state.bank, categoryId: state.categoryId }) : [];
-
-    const groups = [];
-    for (const r of rows) {
-      if (!groups.length || groups[groups.length - 1].date !== r.date) groups.push({ date: r.date, rows: [] });
-      groups[groups.length - 1].rows.push(r);
-    }
+    const group = (kind, label) => {
+      const list = cats.filter((c) => c.kind === kind);
+      return `<optgroup label="${label}">${list.map((c) => `<option value="${c.id}" ${state.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`;
+    };
 
     el.innerHTML = `
       <div class="title-row"><h1>İşlemler</h1><button class="add-btn" id="add-cash">+ Nakit</button></div>
@@ -231,20 +262,40 @@
         <select id="list-cat">
           <option value="">Kategori: Hepsi</option>
           <option value="-1" ${state.categoryId === -1 ? 'selected' : ''}>❓ İncelenecekler</option>
-          ${cats.map((c) => `<option value="${c.id}" ${state.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+          ${group('expense', 'Gider')}${group('income', 'Gelir')}${group('excluded', 'Toplama katılmayan')}
         </select>
       </div>
-      ${!rows.length ? '<div class="card empty"><p class="muted">Gösterilecek işlem yok.</p></div>' : ''}
-      ${groups.map((g) => `
-        <div class="day">${dayLabel(g.date)}</div>
-        <div class="tx-group">${g.rows.map(txRow).join('')}</div>`).join('')}
+      ${rows.length ? `<div class="field"><input type="search" id="list-search" placeholder="🔎 Ara: açıklama veya tutar" value="${esc(state.query)}" autocomplete="off"></div>` : ''}
+      <div id="list-body"></div>
 `;
+    const body = $('#list-body');
+    const drawRows = () => {
+      // Search in the description (with or without Turkish letters) and in the amount ("75,25")
+      const q = AppDB.normalize(state.query);
+      const shown = !q ? rows : rows.filter((r) =>
+        AppDB.normalize(r.description + ' ' + shortTitle(r.description, r.amount_kurus)).includes(q) ||
+        money.format(Math.abs(r.amount_kurus) / 100).includes(state.query.trim()));
+      const groups = [];
+      for (const r of shown) {
+        if (!groups.length || groups[groups.length - 1].date !== r.date) groups.push({ date: r.date, rows: [] });
+        groups[groups.length - 1].rows.push(r);
+      }
+      const inSum = shown.filter((r) => r.amount_kurus > 0).reduce((t, r) => t + r.amount_kurus, 0);
+      const outSum = shown.filter((r) => r.amount_kurus < 0).reduce((t, r) => t + r.amount_kurus, 0);
+      body.innerHTML = !shown.length
+        ? `<div class="card empty"><p class="muted">${rows.length ? 'Aramaya uyan işlem yok.' : 'Gösterilecek işlem yok.'}</p></div>`
+        : `<div class="list-total small muted">${shown.length} işlem${inSum ? ` · <span class="pos">Giren ${tl(inSum)}</span>` : ''}${outSum ? ` · <span class="neg">Çıkan ${tl(-outSum)}</span>` : ''}</div>
+           ${groups.map((g) => `<div class="day">${dayLabel(g.date)}</div><div class="tx-group">${g.rows.map(txRow).join('')}</div>`).join('')}`;
+      for (const row of body.querySelectorAll('[data-tx]')) row.onclick = () => openCategorySheet(Number(row.dataset.tx));
+    };
+    drawRows();
+    const search = $('#list-search');
+    if (search) search.oninput = () => { state.query = search.value; drawRows(); };
 
     const monthSel = $('#list-month');
     if (monthSel) monthSel.onchange = (e) => { state.month = e.target.value; render(); };
     $('#list-cat').onchange = (e) => { state.categoryId = e.target.value === '' ? null : Number(e.target.value); render(); };
     for (const chip of el.querySelectorAll('[data-bank]')) chip.onclick = () => { state.bank = chip.dataset.bank || null; render(); };
-    for (const row of el.querySelectorAll('[data-tx]')) row.onclick = () => openCategorySheet(Number(row.dataset.tx));
     $('#add-cash').onclick = openCashSheet;
   }
 
@@ -359,7 +410,7 @@
     }
     for (const b of el.querySelectorAll('[data-rule]')) b.onclick = async () => { db.deleteRule(Number(b.dataset.rule)); await db.save(); render(); };
     $('#backup').onclick = downloadBackup;
-    $('#restore-input').onchange = (e) => restoreBackup(e.target.files[0]);
+    $('#restore-input').onchange = (e) => { restoreBackup(e.target.files[0]); e.target.value = ''; };
     $('#wipe').onclick = () => confirmSheet('Tüm veriler silinsin mi?', 'İşlemler, öğrenilen kurallar ve yüklenen ekstreler kalıcı olarak silinir.', 'Evet, sil', async () => {
       await db.wipe();
       state.lastImport = null;
@@ -396,7 +447,21 @@
         const data = new Uint8Array(await file.arrayBuffer());
         const status = (text) => ($('#import-result').innerHTML = `<div class="card" style="margin-top:12px">${esc(file.name)}: ${esc(text)}</div>`);
         status('okunuyor…');
-        const { bank, rows, ocr } = await Parsers.parseStatement(pdfjsLib, data, { ocr: (d) => ImageStatement.readImageStatement(pdfjsLib, d, status) });
+        const ocrReader = (d, password) => ImageStatement.readImageStatement(pdfjsLib, d, status, password);
+        // Some banks lock the PDF with a password: ask for it (again if it was wrong) and retry
+        let password;
+        let parsed = null;
+        while (!parsed) {
+          try {
+            parsed = await Parsers.parseStatement(pdfjsLib, data, { ocr: ocrReader, password });
+          } catch (err) {
+            if (!err || err.name !== 'PasswordException') throw err;
+            password = await askPassword(file.name, err.code === 2 /* INCORRECT_PASSWORD */);
+            if (password == null) throw new Error('PDF şifreli; şifre girilmediği için okunmadı.');
+            status('okunuyor…');
+          }
+        }
+        const { bank, rows, ocr } = parsed;
         const bankName = Parsers.BANK_NAMES[bank];
         const res = db.importStatement(bankName, rows, file.name);
         results.push({ file: file.name, bank: bankName, ocr, uncertain: rows.filter((r) => r.uncertain).length, ...res });
@@ -409,6 +474,31 @@
     state.lastImport = results;
     state.month = null; // jump to the newest month
     render();
+  }
+
+  // A small panel that asks for a PDF's password. Resolves with the text, or null if cancelled.
+  function askPassword(fileName, wrong) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (value) => { if (done) return; done = true; window.removeEventListener('popstate', onBack); resolve(value); };
+      const onBack = () => finish(null);
+      openSheet(`
+        <h3>🔒 Şifreli PDF</h3>
+        <p class="muted small" style="margin-top:0">${esc(fileName)} şifreyle korunuyor. Banka genelde şifreyi SMS ile gönderir ya da T.C. kimlik numaranın / doğum tarihinin bir kısmıdır.</p>
+        ${wrong ? '<p class="small" style="color:var(--red);margin:0 0 6px">Şifre yanlış, tekrar dene.</p>' : ''}
+        <div class="field"><input type="password" id="pdf-pass" autocomplete="off" placeholder="PDF şifresi"></div>
+        <div class="btn-row"><button class="btn ghost" id="pass-cancel">Vazgeç</button><button class="btn" id="pass-ok">Aç</button></div>`,
+        (sheet) => {
+          window.addEventListener('popstate', onBack);
+          const input = $('#pdf-pass', sheet);
+          input.focus();
+          const ok = () => { const v = input.value; closeSheet(); finish(v); };
+          $('#pass-ok').onclick = ok;
+          input.onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+          $('#pass-cancel').onclick = () => { closeSheet(); finish(null); };
+          $('#sheet-backdrop').addEventListener('click', onBack, { once: true });
+        });
+    });
   }
 
   function downloadBackup() {
@@ -451,7 +541,6 @@
 
     if (state.reviewIndex >= queue.length) state.reviewIndex = 0;
     const tx = queue[state.reviewIndex];
-    const cats = categoriesFor(tx.amount_kurus);
     const suggestion = AppDB.suggestKeyword(tx.description, tx.amount_kurus);
 
     el.innerHTML = `
@@ -468,10 +557,7 @@
       </div>
 
       <h2>Hangi kategori?</h2>
-      <div class="cat-grid" id="review-cats">
-        ${cats.map((c) => `<button class="cat-btn" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`).join('')}
-        <button class="cat-btn cat-new" data-newcat="1"><span class="dot plus">+</span>Yeni kategori</button>
-      </div>
+      <div id="review-cats">${categoryGrid(tx.amount_kurus, null)}</div>
 
       <label class="remember"><input type="checkbox" id="remember" ${suggestion ? 'checked' : ''}>
         <span>Bundan sonra bu kelimeyi içeren işlemleri hep bu kategoriye koy:</span></label>
@@ -512,27 +598,44 @@
     };
   }
 
-  // Money out → expense categories, money in → income categories; transfers fit both
-  function categoriesFor(amountKurus) {
-    const kind = amountKurus < 0 ? 'expense' : 'income';
+  // The category buttons for a transaction, in groups:
+  //  money out → expense categories; money in → income categories, then expense categories
+  //  (a refund, "İADE", lowers that category's spending); transfers fit both and come last.
+  function categoryGrid(amountKurus, selectedId) {
     const hasCard = db.one("SELECT COUNT(*) AS n FROM accounts WHERE type = 'credit_card'").n > 0;
-    const list = db.categories().filter((c) => c.kind === kind || c.kind === 'excluded');
-    return list
-      .filter((c) => hasCard || c.name !== 'Kredi kartı ödemesi') // only useful once a card statement exists
-      .sort((a, b) => (a.kind === 'excluded') - (b.kind === 'excluded')); // transfers at the end
+    const all = db.categories().filter((c) => hasCard || c.name !== 'Kredi kartı ödemesi'); // only useful once a card statement exists
+    const btn = (c) => `<button class="cat-btn ${c.id === selectedId ? 'on' : ''}" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`;
+    const section = (title, list) => list.length ? `<div class="cat-sec">${title}</div>${list.map(btn).join('')}` : '';
+    const of = (kind) => all.filter((c) => c.kind === kind);
+    const newBtn = '<button class="cat-btn cat-new" data-newcat="1"><span class="dot plus">+</span>Yeni kategori</button>';
+    return amountKurus < 0
+      ? `<div class="cat-grid">${of('expense').map(btn).join('')}${newBtn}${section('Toplama katılmaz', of('excluded'))}</div>`
+      : `<div class="cat-grid">${of('income').map(btn).join('')}${newBtn}${section('Toplama katılmaz', of('excluded'))}</div>
+         <details class="refund" ${of('expense').some((c) => c.id === selectedId) ? 'open' : ''}>
+           <summary>İade mi? Harcama kategorisi seç (o harcamadan düşülür)</summary>
+           <div class="cat-grid">${of('expense').map(btn).join('')}</div>
+         </details>`;
   }
 
   // ---------- Sheets (pop-up panels) ----------
 
+  // The phone's back button closes an open panel instead of leaving the app:
+  // opening a panel adds a history entry, going back removes it.
   function openSheet(html, onReady) {
+    if ($('#sheet').hidden && !(history.state && history.state.sheet)) history.pushState({ sheet: true }, '');
     $('#sheet').innerHTML = html;
     $('#sheet').hidden = false;
     $('#sheet-backdrop').hidden = false;
+    $('#sheet').scrollTop = 0;
     onReady && onReady($('#sheet'));
   }
-  function closeSheet() {
+  function hideSheet() {
     $('#sheet').hidden = true;
     $('#sheet-backdrop').hidden = true;
+  }
+  function closeSheet() {
+    hideSheet();
+    if (history.state && history.state.sheet) history.back();
   }
 
   // Tap on a transaction → change its category
@@ -541,15 +644,11 @@
       `SELECT t.*, a.bank FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.id = :id`,
       { ':id': txId }
     );
-    const cats = categoriesFor(tx.amount_kurus);
     openSheet(`
       <h3>${esc(shortTitle(tx.description, tx.amount_kurus))}</h3>
       <div class="muted small">${dayLabel(tx.date)} · ${esc(tx.bank)} · <b>${tl(tx.amount_kurus, { sign: true })}</b></div>
       <p class="small" style="word-break:break-word">${esc(tx.description)}</p>
-      <div class="cat-grid">
-        ${cats.map((c) => `<button class="cat-btn ${c.id === tx.category_id ? 'on' : ''}" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</button>`).join('')}
-        <button class="cat-btn cat-new" data-newcat="1"><span class="dot plus">+</span>Yeni kategori</button>
-      </div>
+      ${categoryGrid(tx.amount_kurus, tx.category_id)}
       <label class="remember"><input type="checkbox" id="sheet-remember">
         <span>Benzerlerini de hatırla:</span></label>
       <input type="text" id="sheet-keyword" class="kw-input" value="${esc(AppDB.suggestKeyword(tx.description, tx.amount_kurus))}">
@@ -559,7 +658,7 @@
           <button data-sign="-1" class="${tx.amount_kurus < 0 ? 'on' : ''}">Giden (−)</button>
           <button data-sign="1" class="${tx.amount_kurus > 0 ? 'on' : ''}">Gelen (+)</button>
         </div>
-        <div class="field"><input type="number" id="fix-amount" inputmode="decimal" step="0.01" min="0" value="${(Math.abs(tx.amount_kurus) / 100).toFixed(2)}"></div>
+        <div class="field"><input type="text" id="fix-amount" inputmode="decimal" autocomplete="off" value="${money.format(Math.abs(tx.amount_kurus) / 100)}"></div>
         <button class="btn ghost" id="fix-save" style="margin-bottom:10px">Tutarı kaydet</button>
       </details>
       ${tx.source === 'manual' ? '<button class="btn danger" id="sheet-delete" style="margin-bottom:8px">Bu nakit kaydını sil</button>' : ''}
@@ -592,8 +691,8 @@
           };
         }
         $('#fix-save').onclick = async () => {
-          const value = Math.round(parseFloat(String($('#fix-amount').value).replace(',', '.')) * 100);
-          if (!value || value <= 0) return toast('Tutarı yaz.');
+          const value = parseAmount($('#fix-amount').value);
+          if (!value) return toast('Tutarı yaz (örn. 125,50).');
           const flipped = db.updateAmount(txId, sign * value);
           await db.save();
           closeSheet();
@@ -617,7 +716,7 @@
       <h3>Nakit ekle</h3>
       <p class="muted small" style="margin-top:0">Nakit harcamalar ekstrede görünmez; buradan elle eklenir.</p>
       <div class="seg"><button class="on" data-kind="expense">Gider</button><button data-kind="income">Gelir</button></div>
-      <div class="field"><label>Tutar (₺)</label><input type="number" id="cash-amount" inputmode="decimal" min="0" step="0.01" placeholder="0,00"></div>
+      <div class="field"><label>Tutar (₺)</label><input type="text" id="cash-amount" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
       <div class="field"><label>Açıklama</label><input type="text" id="cash-desc" placeholder="Örn. Halı saha"></div>
       <div class="field"><label>Kategori</label><select id="cash-cat"></select></div>
       <div class="field"><label>Tarih</label><input type="date" id="cash-date" value="${todayIso()}"></div>
@@ -633,8 +732,8 @@
         }
         $('#cash-cancel').onclick = closeSheet;
         $('#cash-save').onclick = async () => {
-          const amount = Math.round(parseFloat(String($('#cash-amount').value).replace(',', '.')) * 100);
-          if (!amount || amount <= 0) return toast('Tutarı yaz.');
+          const amount = parseAmount($('#cash-amount').value);
+          if (!amount) return toast('Tutarı yaz (örn. 45,50).');
           const date = $('#cash-date').value || todayIso();
           db.addManual({
             date,
@@ -725,6 +824,8 @@
 
     for (const b of document.querySelectorAll('.tabbar button')) b.onclick = () => show(b.dataset.screen);
     $('#sheet-backdrop').onclick = closeSheet;
+    window.addEventListener('popstate', hideSheet);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet(); });
     // Any element with data-go="screen" works as a shortcut to that screen
     document.addEventListener('click', (e) => {
       const go = e.target.closest('[data-go]');
