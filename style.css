@@ -323,3 +323,5 @@ select, input[type="text"], input[type="number"], input[type="date"] {
 .cat-line b { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
 .title-row { display: flex; align-items: center; justify-content: space-between; }
 .add-btn { border: 0; background: var(--green); color: #fff; font-weight: 700; border-radius: 20px; padding: 8px 14px; cursor: pointer; }
+.fix-amount { background: var(--card); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
+.fix-amount summary { cursor: pointer; font-size: 14px; font-weight: 600; }

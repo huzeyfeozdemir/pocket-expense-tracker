@@ -275,6 +275,41 @@
   }
 
   // Main entry: returns { bank, rows } or throws a readable error.
+  // ---------- Checking + / − against the balance column ----------
+  // A statement lists rows either oldest-first or newest-first. We try both orders and keep
+  // the one where "balance change = amount" holds for most rows. Then every row whose
+  // balance changes by exactly its amount gets the sign of that change. Rows where the
+  // numbers do not add up are marked uncertain.
+  function fixSignsByBalance(rows) {
+    const usable = rows.filter((r) => r.balanceKurus != null && r.amountKurus != null);
+    if (usable.length < 2) return { order: 'asc', checked: 0 };
+    const matches = (order) => {
+      let n = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const prev = order === 'asc' ? rows[i - 1] : rows[i + 1];
+        if (!prev || prev.balanceKurus == null || rows[i].balanceKurus == null) continue;
+        if (Math.abs(rows[i].balanceKurus - prev.balanceKurus) === Math.abs(rows[i].amountKurus)) n++;
+      }
+      return n;
+    };
+    const order = matches('desc') > matches('asc') ? 'desc' : 'asc';
+    let checked = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const prev = order === 'asc' ? rows[i - 1] : rows[i + 1];
+      if (!prev || prev.balanceKurus == null || r.balanceKurus == null) continue;
+      const diff = r.balanceKurus - prev.balanceKurus;
+      if (Math.abs(diff) === Math.abs(r.amountKurus)) {
+        r.amountKurus = diff < 0 ? -Math.abs(r.amountKurus) : Math.abs(r.amountKurus);
+        r.uncertain = false;
+        checked++;
+      } else {
+        r.uncertain = true;
+      }
+    }
+    return { order, checked };
+  }
+
   // ---------- Image-only PDFs (OCR) ----------
   // Some banks (Ziraat's mobile app) save the statement as a picture. app.js turns the
   // picture into text with OCR (Tesseract); here we turn that text into transactions.
@@ -307,28 +342,16 @@
     const debitTotal = total('Bor[çc]');
     const creditTotal = total('Alacak');
 
-    // Decide + or − from the balance: if the balance went up, money came in
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const abs = Math.abs(r.amountKurus);
-      const prev = rows[i - 1];
-      if (prev && prev.balanceKurus != null && r.balanceKurus != null) {
-        const diff = r.balanceKurus - prev.balanceKurus;
-        r.amountKurus = diff < 0 ? -abs : abs;
-        r.uncertain = Math.abs(diff) !== abs;
-      } else if (r.amountKurus < 0) {
-        r.uncertain = false;
-      } else {
-        r.amountKurus = abs; // first row: sign decided below from the printed totals
-        r.uncertain = debitTotal == null || creditTotal == null;
-      }
-    }
-    // First row: the sign that makes "Alacak" (money in) add up is the right one
+    // + or − comes from the balance (works whether the list is oldest-first or newest-first)
+    const { order } = fixSignsByBalance(rows);
+
+    // The oldest row has no earlier balance: its sign is the one that makes "Alacak" (money in) add up
     if (rows.length && creditTotal != null) {
-      const first = rows[0];
-      const abs = Math.abs(first.amountKurus);
-      const otherIn = rows.slice(1).filter((r) => r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
-      first.amountKurus = otherIn + abs === creditTotal ? abs : -abs;
+      const oldest = order === 'desc' ? rows[rows.length - 1] : rows[0];
+      const abs = Math.abs(oldest.amountKurus);
+      const otherIn = rows.filter((r) => r !== oldest && r.amountKurus > 0).reduce((a, r) => a + r.amountKurus, 0);
+      oldest.amountKurus = otherIn + abs === creditTotal ? abs : -abs;
+      oldest.uncertain = false;
     }
     // Final check: the totals printed on the statement must match what we read
     if (debitTotal != null && creditTotal != null) {
@@ -368,10 +391,12 @@
     if (!bank) throw new Error('Bu ekstrenin hangi bankaya ait olduğu anlaşılamadı.');
     const rows = PARSERS[bank](items);
     if (!rows.length) throw new Error('Ekstrede işlem bulunamadı.');
+    fixSignsByBalance(rows); // safety net: + / − must agree with the balance column
+    for (const r of rows) r.fingerprint = r.fingerprint.replace(/\|-?\d+$/, `|${r.amountKurus}`);
     return { bank, rows, ocr: false };
   }
 
-  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, parseOcrZiraat, PARSERS, BANK_NAMES };
+  const api = { parseStatement, extractItems, detectBank, parseMoney, toIsoDate, parseOcrZiraat, fixSignsByBalance, PARSERS, BANK_NAMES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.Parsers = api;
 })(typeof window !== 'undefined' ? window : globalThis);

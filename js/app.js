@@ -483,7 +483,8 @@
         <div class="muted small">${dayLabel(tx.date)} · ${esc(tx.bank)}</div>
         <div class="desc">${esc(tx.description)}</div>
         <div class="big ${tx.amount_kurus > 0 ? 'pos' : ''}">${tl(tx.amount_kurus, { sign: true })}</div>
-        ${tx.ocr ? '<p class="small" style="margin:8px 0 0;color:#8a6100">📷 Bu satır fotoğraftan okundu ve bakiyeyle tutmadı. Tutarı ekstreyle karşılaştır.</p>' : ''}
+        ${tx.ocr ? `<p class="small" style="margin:8px 0 6px;color:#8a6100">📷 Bu satırın tutarı bakiyeyle tutmadı. Ekstreyle karşılaştır; yanlışsa düzelt.</p>
+          <button class="btn ghost" id="fix-from-review">Tutarı düzelt</button>` : ''}
       </div>
 
       <h2>Hangi kategori?</h2>
@@ -513,6 +514,7 @@
         $('#save').disabled = false;
       };
     }
+    if ($('#fix-from-review')) $('#fix-from-review').onclick = () => openCategorySheet(tx.id);
     $('#skip').onclick = () => { state.reviewIndex = (state.reviewIndex + 1) % queue.length; render(); };
     $('#save').onclick = async () => {
       const keyword = $('#remember').checked ? $('#keyword').value : '';
@@ -563,6 +565,15 @@
       <label class="remember"><input type="checkbox" id="sheet-remember">
         <span>Benzerlerini de hatırla:</span></label>
       <input type="text" id="sheet-keyword" class="kw-input" value="${esc(AppDB.suggestKeyword(tx.description, tx.amount_kurus))}">
+      <details class="fix-amount" ${tx.ocr ? 'open' : ''}>
+        <summary>Tutar yanlış mı? Düzelt</summary>
+        <div class="seg" style="margin-top:10px">
+          <button data-sign="-1" class="${tx.amount_kurus < 0 ? 'on' : ''}">Giden (−)</button>
+          <button data-sign="1" class="${tx.amount_kurus > 0 ? 'on' : ''}">Gelen (+)</button>
+        </div>
+        <div class="field"><input type="number" id="fix-amount" inputmode="decimal" step="0.01" min="0" value="${(Math.abs(tx.amount_kurus) / 100).toFixed(2)}"></div>
+        <button class="btn ghost" id="fix-save" style="margin-bottom:10px">Tutarı kaydet</button>
+      </details>
       ${tx.source === 'manual' ? '<button class="btn danger" id="sheet-delete" style="margin-bottom:8px">Bu nakit kaydını sil</button>' : ''}
       <button class="btn ghost" id="sheet-close">Kapat</button>`,
       (sheet) => {
@@ -576,6 +587,22 @@
             render();
           };
         }
+        let sign = tx.amount_kurus < 0 ? -1 : 1;
+        for (const b of sheet.querySelectorAll('[data-sign]')) {
+          b.onclick = () => {
+            sign = Number(b.dataset.sign);
+            for (const x of sheet.querySelectorAll('[data-sign]')) x.classList.toggle('on', x === b);
+          };
+        }
+        $('#fix-save').onclick = async () => {
+          const value = Math.round(parseFloat(String($('#fix-amount').value).replace(',', '.')) * 100);
+          if (!value || value <= 0) return toast('Tutarı yaz.');
+          const flipped = db.updateAmount(txId, sign * value);
+          await db.save();
+          closeSheet();
+          toast(flipped ? 'Tutar düzeltildi · kategorisini inceleme kutusunda seç' : 'Tutar düzeltildi');
+          render();
+        };
         const del = $('#sheet-delete');
         if (del) del.onclick = async () => { db.deleteTransaction(txId); await db.save(); closeSheet(); render(); };
         $('#sheet-close').onclick = closeSheet;

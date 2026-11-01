@@ -346,6 +346,21 @@
       );
     }
 
+    // Fix an amount (e.g. a digit misread from a photo, or money in shown as money out).
+    // If in/out flips, the old category no longer fits: send it back to the review box.
+    updateAmount(id, amountKurus) {
+      const tx = this.one('SELECT amount_kurus FROM transactions WHERE id = :id', { ':id': id });
+      const flipped = Math.sign(tx.amount_kurus) !== Math.sign(amountKurus);
+      this.run(
+        `UPDATE transactions SET amount_kurus = :a, ocr = 0,
+           category_id = CASE WHEN :f THEN NULL ELSE category_id END,
+           needs_review = CASE WHEN :f THEN 1 ELSE 0 END
+         WHERE id = :id`,
+        { ':a': amountKurus, ':f': flipped ? 1 : 0, ':id': id }
+      );
+      return flipped;
+    }
+
     deleteTransaction(id) {
       this.run("DELETE FROM transactions WHERE id = :id AND source = 'manual'", { ':id': id });
     }
